@@ -14,12 +14,11 @@ App Storeでは配布していません。AltStore ClassicまたはLiveContainer
 
 IPAを直接ダウンロードする場合は、[リリースページ](https://github.com/hinatamaxxx/komiflo-viewer/releases/latest)から入手できます。配布ソースと同じIPAです。
 
-<p>
-  <a href="https://altdirect.app/?r=altstore&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fhinatamaxxx%2Fkomiflo-viewer%2Fmain%2Fdistribution%2Fsource.json"><img src="docs/assets/add-altstore.svg" width="220" alt="AltStoreに追加"></a>
-  <a href="https://altdirect.app/?r=livecontainer&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fhinatamaxxx%2Fkomiflo-viewer%2Fmain%2Fdistribution%2Fsource.json"><img src="docs/assets/add-livecontainer.svg" width="220" alt="LiveContainerに追加"></a>
-</p>
+| AltStore Classicに追加 | LiveContainerに追加 |
+| :---: | :---: |
+| <a href="https://altdirect.app/?r=altstore&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fhinatamaxxx%2Fkomiflo-viewer%2Fmain%2Fdistribution%2Fsource.json"><img src="docs/assets/add-source.svg" width="220" alt="AltStoreに追加"></a> | <a href="https://altdirect.app/?r=livecontainer&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fhinatamaxxx%2Fkomiflo-viewer%2Fmain%2Fdistribution%2Fsource.json"><img src="docs/assets/add-source.svg" width="220" alt="LiveContainerに追加"></a> |
 
-ボタンは[AltDirect](https://github.com/StikDebug/altdirect)を経由して、それぞれのアプリでソースを開く形式です。
+ボタンには[AltDirect](https://github.com/StikDebug/altdirect)の配布用バッジを使用しています。それぞれのアプリでソース登録を開きます。
 
 ### AltStore Classic
 
