@@ -1,0 +1,55 @@
+{
+  "name": "KomifloViewer",
+  "identifier": "local.komifloviewer.source",
+  "subtitle": "iPhone・iPadで読むKomifloの非公式アプリ",
+  "website": "https://github.com/hinatamaxxx/komiflo-viewer",
+  "iconURL": "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/assets/icon.png",
+  "tintColor": "EF4274",
+  "nsfw": true,
+  "apps": [
+    {
+      "name": "KomifloViewer",
+      "bundleIdentifier": "local.komifloviewer.app",
+      "developerName": "KomifloViewer contributors",
+      "localizedDescription": "横読み・縦スクロール・見開き、検索・タグの掛け合わせ、履歴・ブックマーク。Komifloアカウントと作品の閲覧権限が必要な非公式アプリです。",
+      "iconURL": "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/assets/icon.png",
+      "tintColor": "EF4274",
+      "category": "entertainment",
+      "screenshotURLs": [
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/home.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/reader.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/reader-index.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/search-artists.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/tag-picker.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/history.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/magazines.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/notifications.png"
+      ],
+      "screenshots": [
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/home.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/reader.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/reader-index.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/search-artists.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/tag-picker.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/history.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/magazines.png",
+        "https://raw.githubusercontent.com/hinatamaxxx/komiflo-viewer/main/docs/screenshots/notifications.png"
+      ],
+      "versions": [
+        {
+          "version": "3.32.265",
+          "buildVersion": "372",
+          "date": "2026-10-13",
+          "downloadURL": "https://github.com/hinatamaxxx/komiflo-viewer/releases/download/v3.32.265/KomifloViewer-3.32.265.ipa",
+          "size": 19245345,
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {}
+      }
+    }
+  ],
+  "news": []
+}

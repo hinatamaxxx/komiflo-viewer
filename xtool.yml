@@ -1,0 +1,3 @@
+version: 1
+bundleID: local.komifloviewer.app
+infoPath: LocalBuild/Info.plist

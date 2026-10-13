@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="112" viewBox="0 0 440 112" role="img" aria-label="LiveContainerに追加">
+<rect x="1" y="1" width="438" height="110" rx="24" fill="#202027" stroke="#777783" stroke-width="2"/>
+<path d="M50 37v38m-19-19h38" stroke="#ef4274" stroke-width="5" stroke-linecap="round"/>
+<text x="86" y="65" fill="white" font-size="27" font-weight="600" font-family="system-ui,sans-serif">LiveContainerに追加</text>
+</svg>
