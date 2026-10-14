@@ -37,6 +37,15 @@
       ],
       "versions": [
         {
+          "version": "3.32.292",
+          "buildVersion": "399",
+          "date": "2026-10-14",
+          "localizedDescription": "ランキングの特集で、サムネイルの順位が1つずつずれていたのを直しました。使われていない古いコードを整理しました。",
+          "downloadURL": "https://github.com/hinatamaxxx/komiflo-viewer/releases/download/v3.32.292/KomifloViewer-3.32.292.ipa",
+          "size": 3532671,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "3.32.290",
           "buildVersion": "397",
           "date": "2026-10-14",

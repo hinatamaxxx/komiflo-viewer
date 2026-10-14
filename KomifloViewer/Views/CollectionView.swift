@@ -67,7 +67,8 @@ struct CollectionView: View {
     /// ランキングの特集は、新作ランキングと同じくサムネイルに順位を付ける（公式の並び順が順位）
     private var ranks: [Int: Int] {
         guard heading?.title.contains("ランキング") == true else { return [:] }
-        return Dictionary(feed.comics.enumerated().map { ($0.element.id, $0.offset + 1) },
+        // 先頭の扉絵（「TOP50」などの作家のいない画像）は順位に数えない
+        return Dictionary(feed.comics.filter { $0.author != nil }.enumerated().map { ($0.element.id, $0.offset + 1) },
                           uniquingKeysWith: { first, _ in first })
     }
 
