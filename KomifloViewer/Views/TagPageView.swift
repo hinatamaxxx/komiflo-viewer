@@ -20,8 +20,9 @@ struct TagPageView: View {
     @State private var tagID: Int?
     @State private var tagName = ""
     @State private var tagImageURL: URL?
-    @State private var headerCandidateURL: URL?
-    @State private var headerThumbnail: TagHeaderThumbnail.Selection?
+    /// 帯に使う作家（先頭の作品の作家）と、そのプロフィール画像
+    @State private var headerAuthorSlug: String?
+    @State private var authorImageURL: URL?
     @State private var extraTags: [KFAttribute] = []
     @State private var feeds: [Int: ChronologicalComicFeed] = [:]
     @State private var page = 0
@@ -42,8 +43,8 @@ struct TagPageView: View {
         self.headerImageURL = headerImageURL
         self.options = options
         self.homeComics = homeComics
-        if options.initialPage == 0, headerImageURL == nil, !homeComics.contains(where: \.isCoverExpired) {
-            _headerCandidateURL = State(initialValue: homeComics.first?.coverURL)
+        if options.initialPage == 0, headerImageURL == nil {
+            _headerAuthorSlug = State(initialValue: homeComics.first?.authorSlug)
         }
         _page = State(initialValue: max(0, options.initialPage))
         _pageCount = State(initialValue: max(1, options.initialPage + 1))
@@ -67,9 +68,7 @@ struct TagPageView: View {
                             isFollowing: tagID.map { library.followedIDs.contains($0) } ?? false,
                             followAnimated: followToggledAt.map { Date().timeIntervalSince($0) < 3 } ?? false,
                             onFollow: tagID == nil ? nil : toggleFollow, onBack: { dismiss() },
-                            bannerURL: headerImageURL ?? tagImageURL ?? headerThumbnail?.url,
-                            bannerFocus: headerImageURL == nil && tagImageURL == nil ? headerThumbnail?.focus : nil,
-                            bannerProtectedHead: headerImageURL == nil && tagImageURL == nil ? headerThumbnail?.protectedHead : nil,
+                            bannerURL: headerImageURL ?? tagImageURL ?? authorImageURL,
                             sectionPicker: AnyView(pagePicker.background(Theme.background)),
                             topTrailing: { AnyView(combinationMenu(height: $0)) }, followCrossesBoundary: true)
         } content: { item, width, minimumHeight in
@@ -118,20 +117,21 @@ struct TagPageView: View {
         .onChange(of: page) { _, value in
             Task { await load(page: value) }
         }
-        .task(id: headerCandidateURL) {
-            // 一覧更新でURLが変わっても、画像と切り抜き位置が揃ってから一緒に差し替える。
-            do {
-                let selected = try await TagHeaderThumbnail.select(url: headerCandidateURL)
-                guard !Task.isCancelled else { return }
-                headerThumbnail = selected
-            } catch {
-                guard !Task.isCancelled else { return }
-                headerThumbnail = headerCandidateURL.map { .init(url: $0, focus: nil, protectedHead: nil) }
-                library.actionError = error.localizedDescription
-            }
+        .task(id: headerAuthorSlug) {
+            await ArtistProfileImage.load(authorSlug: headerAuthorSlug, api: library.api) { authorImageURL = $0 }
         }
         .task { if !library.hasLoadedFollows { await library.loadFollows() } }
         .markErrorAlert(library)
+    }
+
+    /// 保存してあったタグの情報で先に出した後、公式から取り直して名前と画像を最新にする（帯の画像が変わっていれば差し替わる）
+    private func refreshTagInfo(slug: String, generation: Int) {
+        Task {
+            guard let latest = try? await library.api.attribute(slug: slug),
+                  generation == loadGeneration, latest.id == tagID else { return }
+            tagName = latest.name
+            tagImageURL = latest.bannerURL
+        }
     }
 
     private var pagePicker: some View {
@@ -283,6 +283,7 @@ struct TagPageView: View {
                     let tag: KFAttribute
                     if let cached = try? await APICache.fromCache({ try await library.api.attribute(slug: slug) }) {
                         tag = cached
+                        refreshTagInfo(slug: slug, generation: generation)
                     } else {
                         tag = try await library.api.attribute(slug: slug)
                     }
@@ -321,7 +322,7 @@ struct TagPageView: View {
                 pageCount = max(1, response.totalPages ?? 1)
                 if let count { total = count }
                 if requestedPage == options.initialPage, extraTags.isEmpty, headerImageURL == nil, tagImageURL == nil {
-                    headerCandidateURL = contents.first?.coverURL
+                    headerAuthorSlug = contents.first?.summary.authorSlug
                 }
                 return true
             }

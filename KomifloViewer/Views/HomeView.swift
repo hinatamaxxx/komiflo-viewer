@@ -24,7 +24,106 @@ struct HomeView: View {
     /// まだ何も届いていない間は、公式ホームと同じ並びで仮の枠を出しておく
     private var showsPlaceholders: Bool { loadError == nil && (isLoading || !didLoadBanners) }
 
+    /// 上の切り替え：ホームと、ホームのバナーを集めたピックアップ
+    enum Page: String, CaseIterable, Hashable {
+        case home = "ホーム"
+        case pickup = "ピックアップ"
+    }
+
+    @State private var page: Page = .home
+    @State private var tabProgress = PagerProgress()
+    /// 一覧の切り替えを画面の下に出す（アプリ設定で共通。既定は上）
+    @AppStorage(ControlsPosition.key) private var controlsAtBottom = false
+
+    /// 上の切り替えを、一覧のスクロールに合わせて押し出す・引き出す（帯だけが購読し、一覧は描き直さない）
+    @State private var reveal = SwitcherReveal()
+    @State private var switcherHeight: CGFloat = 48
+
+    /// 上の切り替えの分だけ、一覧の先頭を下げる（切り替えは一覧の上に重ねるので、隠しても一覧はずれない）
+    private var topBarSpace: CGFloat { controlsAtBottom ? 0 : switcherHeight }
+
+    private var switcher: some View {
+        PagerTabs(items: Page.allCases, selection: $page, progress: tabProgress, title: { $0.rawValue })
+    }
+
     var body: some View {
+        // 3.32.270までのホームと同じく、一覧はタブバーの下まで描く（ページを安全領域で切ると、タブバーの後ろが黒帯になる）。
+        // 最後の行がタブバーに隠れないよう、下の余白は一覧の内側に付ける
+        GeometryReader { outer in
+            let bottomInset = outer.safeAreaInsets.bottom
+            // 2ページとも同じ取得結果を使う。ピックアップのために追加の通信はしない
+            PagedView(items: Page.allCases, selection: $page, keepsPagesAlive: true, commitsSelectionOnIdle: true,
+                      progress: tabProgress) { item in
+                switch item {
+                case .home: homePage(bottomInset: bottomInset)
+                case .pickup:
+                    PickupBannerList(sections: pickupSections, isLoading: showsPlaceholders,
+                                     loadError: loadError, topInset: topBarSpace, bottomInset: bottomInset,
+                                     onTap: open, onReload: { await load(force: true) },
+                                     onScroll: { scrolled(.pickup, offset: $0) },
+                                     onScrollPhase: { scrollPhase(.pickup, moving: $0, touching: $1) })
+                }
+            }
+            .ignoresSafeArea(.container, edges: .bottom)
+        }
+        .overlay(alignment: .top) {
+            if !controlsAtBottom {
+                RevealingBar(reveal: reveal) {
+                    switcher
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Theme.background)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                            reveal.height = height
+                            if switcherHeight != height { switcherHeight = height }
+                        }
+                }
+            }
+        }
+        // ページを切り替えたら、切り替えを出し直す
+        .onChange(of: page) { _, _ in reveal.show() }
+        .safeAreaInset(edge: .bottom) {
+            if controlsAtBottom {
+                BottomControlBar { switcher }
+            }
+        }
+        .background(Theme.background.ignoresSafeArea())
+        .navigationTitle("ホーム")
+        .navigationBarTitleDisplayMode(.inline)
+        .darkNavigationBar()
+        // 右上のプロフィールメニューはやめ、公式と同じメニュー（左上の☰）に移した
+        // 作家ページを開いても、ホームの取得を途中で打ち切らない。
+        .onAppear {
+            Task { _ = await ImageCache.shared.thumbnail(for: MagazineLogoRaster.url) }
+            Task { await load() }
+        }
+        .markErrorAlert(library)
+    }
+
+    /// ピックアップの区分（公式ホームのカルーセルの種類ごと）。空の区分は出さない
+    private var pickupSections: [PickupBannerList.Section] {
+        [
+            // 縦横比はホームでの表示と同じ（トップ375×162、セカンド・サード267×115、作家375×121）
+            .init(title: "雑誌", banners: topBanners, isArtist: false, aspect: 375 / 162, collapsible: true),
+            .init(title: "特集", banners: secondBanners, isArtist: false, aspect: 267 / 115),
+            .init(title: "ストア", banners: thirdBanners, isArtist: false, aspect: 267 / 115),
+            .init(title: "作家", banners: artistBanners, isArtist: true, aspect: 375 / 121),
+        ].filter { !$0.banners.isEmpty }
+    }
+
+    /// 一覧のスクロール量（下へ進むほど大きい）が変わったときだけ呼ばれる。表示中のページの動きだけを帯へ伝える
+    /// 指で動かしている・惰性で動いている間かを帯へ伝える（iOS 18以降）
+    private func scrollPhase(_ item: Page, moving: Bool, touching: Bool) {
+        guard item == page, !controlsAtBottom else { return }
+        reveal.setUserScrolling(moving, touching: touching)
+    }
+
+    private func scrolled(_ item: Page, offset: CGFloat) {
+        guard item == page, !controlsAtBottom else { return }
+        reveal.scrolled(item, offset: offset)
+    }
+
+    private func homePage(bottomInset: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 if !topBanners.isEmpty {
@@ -65,20 +164,17 @@ struct HomeView: View {
                 }
             }
             .padding(.vertical, 12)
+            // iOS 17だけ、内容の位置からスクロール量を読む（iOS 18以降はScrollOffsetReader）
+            .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { value in
+                if #unavailable(iOS 18.0) { scrolled(.home, offset: value) }
+            }
         }
-        .background(Theme.background.ignoresSafeArea())
-        .navigationTitle("ホーム")
-        .navigationBarTitleDisplayMode(.inline)
-        .darkNavigationBar()
-        // 右上のプロフィールメニューはやめ、公式と同じメニュー（左上の☰）に移した
-        // 作家ページを開いても、ホームの取得を途中で打ち切らない。
-        .onAppear {
-            Task { await ThumbnailPersonDetector.shared.prepare() }
-            Task { _ = await ImageCache.shared.thumbnail(for: MagazineLogoRaster.url) }
-            Task { await load() }
-        }
+        // 先頭で0・引っ張ると負になるスクロール量を、上の切り替えの表示に使う
+        .modifier(ScrollOffsetReader { scrolled(.home, offset: $0) })
+        .modifier(ScrollPhaseObserver { scrollPhase(.home, moving: $0, touching: $1) })
+        .contentMargins(.top, topBarSpace)
+        .contentMargins(.bottom, bottomInset)
         .refreshable { await load(force: true) }
-        .markErrorAlert(library)
     }
 
     // MARK: - セクション
@@ -143,7 +239,7 @@ struct HomeView: View {
     private func open(_ banner: HomeBanner) {
         if let route = banner.route {
             switch route {
-            case .collection, .tag, .tagSlug, .magazine:
+            case .collection, .tag, .tagSlug, .magazine, .deliveryCalendar:
                 if let imageURL = banner.imageURL {
                     openRoute(.banner(destination: route, imageURL: imageURL))
                 } else {
@@ -229,12 +325,7 @@ struct HomeView: View {
         featured = content.featured
         homeTags = content.tags
         didLoadBanners = true
-        // ホームで既に取得した候補だけを準備する。別のタグの一覧は取りに行かない。
-        let headers = content.featured.prefix(6).compactMap { shelf -> URL? in
-            guard let first = shelf.comics.first, !first.isCoverExpired else { return nil }
-            return first.coverURL
-        }
-        Task { await TagHeaderThumbnail.preparation.enqueue(headers) }
+        HomeBanner.updateMagazineBanners(content.top)
     }
 
     /// 公式ホームと同じ取り方で、バナー・特集の棚・タグをまとめて取る
@@ -291,6 +382,22 @@ struct HomeBanner: Identifiable {
     let href: String?
     let imageURL: URL?
     let route: Route?
+
+    /// トップカルーセル（ピックアップの「雑誌」）の雑誌バナー。雑誌のページの帯に使う（slugで引く）
+    @MainActor static private(set) var magazineBanners: [String: URL] = [:]
+
+    /// ホームを読み直すたび（保存してある前回の分→公式の最新）に入れ替え、いつも最新のバナーを使う。
+    /// カルーセルから外れた雑誌のバナーも残さない
+    @MainActor static func updateMagazineBanners(_ banners: [HomeBanner]) {
+        var latest: [String: URL] = [:]
+        for banner in banners {
+            guard case .magazine(let magazine) = banner.route, let url = banner.imageURL,
+                  latest[magazine.slug] == nil else { continue }
+            latest[magazine.slug] = url
+        }
+        guard !latest.isEmpty else { return }
+        magazineBanners = latest
+    }
 
     /// セクションの中身（siblings）を取り、1枚ずつバナー画像を取る（公式と同じ順番）
     @MainActor
@@ -531,6 +638,169 @@ private struct ArtistBannerCarousel: View {
     private let timer = Timer.publish(every: 3.2, on: .main, in: .common).autoconnect()
 }
 
+/// ピックアップ：ホームのカルーセル・作家バナーを、種類ごとにホームと同じ縦横比で縦に並べる。
+/// iPadなど幅が広いときは2列以上にする
+private struct PickupBannerList: View {
+    struct Section: Identifiable {
+        let title: String
+        let banners: [HomeBanner]
+        let isArtist: Bool
+        /// ホームで表示しているときと同じ縦横比（画像は中央を切り出す）
+        let aspect: CGFloat
+        /// 雑誌の区分だけ、見出しで折りたためる
+        var collapsible = false
+        var id: String { title }
+    }
+
+    /// アプリ設定「ピックアップの雑誌を折りたたむ」（標準オン）。開いた・閉じた操作は画面を作り直すまで優先する
+    @AppStorage(PickupSettings.collapsesMagazinesKey) private var collapsesMagazines = true
+    @State private var magazinesExpanded: Bool?
+    private var showsMagazines: Bool { magazinesExpanded ?? !collapsesMagazines }
+
+    private func title(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(Theme.sectionTitle)
+            .padding(.leading, 15)
+    }
+
+    let sections: [Section]
+    let isLoading: Bool
+    let loadError: String?
+    /// 上に重ねた切り替えの高さと、タブバーの高さ（一覧の内側の余白にする）
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let onTap: (HomeBanner) -> Void
+    let onReload: () async -> Void
+    /// 先頭で0・引っ張ると負になるスクロール量（変わったときだけ）
+    let onScroll: (CGFloat) -> Void
+    /// 指で動かしている・惰性で動いている間か、指が触れている間か（iOS 18以降）
+    let onScrollPhase: (_ moving: Bool, _ touching: Bool) -> Void
+
+    /// 一覧の幅。iPadなど広いときは、1枚320pt以上を保てる数だけ横に並べる
+    @State private var width: CGFloat = 0
+    private var columnCount: Int { max(1, Int((width - 32 + 12) / (320 + 12))) }
+
+    var body: some View {
+        ScrollView {
+            // 上へ戻ったときに行を作り直して位置が補正されると、帯がスクロールと誤って動くため、
+            // 数十枚のバナーは最初からすべて並べる（遅延表示の一覧にしない）
+            VStack(alignment: .leading, spacing: 28) {
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: 10) {
+                        if section.collapsible {
+                            // 見出しを押すと開く・閉じる
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) { magazinesExpanded = !showsMagazines }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    title(section.title)
+                                    Spacer()
+                                    Image(systemName: showsMagazines ? "chevron.up" : "chevron.down")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(Theme.sectionTitle)
+                                }
+                                .padding(.trailing, 16)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityValue(showsMagazines ? "開いています" : "閉じています")
+                        } else {
+                            title(section.title)
+                        }
+                        if !section.collapsible || showsMagazines {
+                            VStack(spacing: 12) {
+                                ForEach(rows(section.banners), id: \.first?.id) { row in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        ForEach(row) { banner in
+                                            card(banner, isArtist: section.isArtist, aspect: section.aspect)
+                                        }
+                                        // 最後の行が欠けても、1枚の幅は他の行と同じにする
+                                        ForEach(row.count..<columnCount, id: \.self) { _ in
+                                            Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                }
+                if sections.isEmpty {
+                    Group {
+                        if isLoading {
+                            ProgressView()
+                        } else {
+                            VStack(spacing: 12) {
+                                Text(loadError ?? "表示できるバナーがありません。")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Button("再読み込み") { Task { await onReload() } }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                }
+            }
+            .padding(.vertical, 12)
+            .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { value in
+                if #unavailable(iOS 18.0) { onScroll(value) }
+            }
+        }
+        .modifier(ScrollOffsetReader(onChange: onScroll))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { value in
+            if width != value { width = value }
+        }
+        .modifier(ScrollPhaseObserver(onChange: onScrollPhase))
+        .contentMargins(.top, topInset)
+        .contentMargins(.bottom, bottomInset)
+        .refreshable { await onReload() }
+    }
+
+    private func rows(_ banners: [HomeBanner]) -> [[HomeBanner]] {
+        stride(from: 0, to: banners.count, by: columnCount).map {
+            Array(banners[$0..<min($0 + columnCount, banners.count)])
+        }
+    }
+
+    private func card(_ banner: HomeBanner, isArtist: Bool, aspect: CGFloat) -> some View {
+        Color.clear
+            .aspectRatio(aspect, contentMode: .fit)
+            .overlay {
+                CachedImage(url: banner.imageURL) {
+                    ZStack {
+                        LinearGradient(colors: [Theme.placeholder, Theme.bar], startPoint: .leading, endPoint: .trailing)
+                        Text(banner.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(8)
+                    }
+                }
+            }
+            // 作家バナーはホームと同じく下に作家名を重ねる
+            .overlay(alignment: .bottomLeading) {
+                if isArtist {
+                    Text(banner.name)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                        )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+            .onTapGesture { onTap(banner) }
+            .accessibilityLabel(banner.name)
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
 /// 読み込み中のバナーの仮の枠（本物と同じ高さで場所を確保し、表示がずれないようにする）
 private struct BannerPlaceholder: View {
     let height: CGFloat
@@ -606,5 +876,116 @@ private struct BannerImage: View {
             .contentShape(Rectangle())
             .accessibilityLabel(banner.name)
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// ホームのピックアップの設定
+enum PickupSettings {
+    /// 雑誌の区分を最初は閉じておく（標準オン）
+    static let collapsesMagazinesKey = "layout.pickupCollapsesMagazines"
+}
+
+/// 上の切り替えの出入り。一覧が動いた分だけ帯を押し出し・引き出す（0で全部見え、heightで隠れきる）
+final class SwitcherReveal: ObservableObject {
+    @Published private(set) var hidden: CGFloat = 0
+    var height: CGFloat = 48
+    /// ページごとの直前のスクロール量と、表示中のページの現在量
+    private var offsets: [AnyHashable: CGFloat] = [:]
+    private var current: CGFloat = 0
+    /// 指で動かしている・惰性で動いている間か。iOS 17は知らせが無いので常に追従する
+    private var userScrolling: Bool = {
+        if #available(iOS 18.0, *) { return false }
+        return true
+    }()
+
+    /// 最後に動いた向き（上へ戻したならtrue）。指を離したときの寄せ方に使う
+    private var revealing = false
+
+    /// moving：指で動かしている・惰性で動いている間。touching：指が触れている間
+    func setUserScrolling(_ moving: Bool, touching: Bool) {
+        let released = userScrolling && !touching
+        userScrolling = moving
+        // 指を離したら、途中で止まっている帯を最後に動かした向きへ寄せる
+        if released { settle() }
+    }
+
+    func scrolled(_ page: AnyHashable, offset: CGFloat) {
+        let previous = offsets[page] ?? offset
+        offsets[page] = offset
+        current = offset
+        // 指以外の位置の補正では帯を動かさない（先頭付近で一覧の上に隠れたままにはしない）
+        guard userScrolling else {
+            set(min(hidden, max(0, offset)))
+            return
+        }
+        if offset != previous { revealing = offset < previous }
+        // 先頭付近では、一覧の先頭と一緒に帯も戻ってくる（一覧の上に隠れたままにしない）
+        set(min(max(0, hidden + offset - previous), height, max(0, offset)))
+    }
+
+    /// 途中で止まった帯を、最後に動かした向きへ寄せる（上へ戻していたら全部出し、下へ進めていたら隠す）。
+    /// 距離で近い方へ寄せると、少しだけ上へ戻したときに出かけた帯がまた隠れてしまう
+    private func settle() {
+        guard hidden > 0, hidden < height else { return }
+        let target: CGFloat = !revealing && current >= height ? height : 0
+        withAnimation(.easeOut(duration: 0.2)) { set(target) }
+    }
+
+    func show() {
+        guard hidden != 0 else { return }
+        withAnimation(.easeOut(duration: 0.2)) { set(0) }
+    }
+
+    private func set(_ value: CGFloat) {
+        if hidden != value { hidden = value }
+    }
+}
+
+/// 帯を、隠れた分だけ上へずらして上端で切る（ホームの見出しに重ならない）
+private struct RevealingBar<Content: View>: View {
+    @ObservedObject var reveal: SwitcherReveal
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .offset(y: -reveal.hidden)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .clipped()
+            .allowsHitTesting(reveal.hidden < reveal.height)
+    }
+}
+
+/// 縦の一覧のスクロール量（先頭で0、下へ進むほど大きく、先頭で引っ張ると負）を、変わったときだけ知らせる。
+/// スクロールの画面自身の位置を使う。内容の位置から計算すると、上の余白の扱いで先頭が0にならなかった
+private struct ScrollOffsetReader: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { _, value in onChange(value) }
+        } else {
+            content
+        }
+    }
+}
+
+/// 縦の一覧を指で動かしている・惰性で動いている間か（moving）と、指が触れている間か（touching）を、
+/// スクロールの段階が変わったときだけ知らせる。iOS 17では知らせない
+private struct ScrollPhaseObserver: ViewModifier {
+    let onChange: (_ moving: Bool, _ touching: Bool) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollPhaseChange { _, phase in
+                let touching = phase == .tracking || phase == .interacting
+                onChange(touching || phase == .decelerating, touching)
+            }
+        } else {
+            content
+        }
     }
 }

@@ -45,10 +45,12 @@ struct PagerTabs<Item: Hashable>: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     tabs.padding(.horizontal, 16)
-                }
-                .onAppear {
-                    guard !items.isEmpty else { return }
-                    proxy.scrollTo(scrollTarget(items[Int(position.rounded())]), anchor: .center)
+                        // 表示した瞬間はボタンの配置が終わっていないことがあり、そこで動かしても効かない。
+                        // 並びの幅が決まったとき（最初の配置・項目の増減）に、選択中のボタンを中央へ
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                            guard width > 0, !items.isEmpty else { return }
+                            proxy.scrollTo(scrollTarget(items[Int(position.rounded())]), anchor: .center)
+                        }
                 }
                 .onChange(of: Int(position.rounded())) { _, index in
                     guard items.indices.contains(index) else { return }

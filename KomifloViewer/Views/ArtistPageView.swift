@@ -129,18 +129,9 @@ struct ArtistPageView: View {
     }
 
     private func shareButton(height: CGFloat) -> some View {
-        ShareLink(item: URL(string: "https://komiflo.com")!
-            .appendingPathComponent("artists").appendingPathComponent(artist?.slug ?? slug)) {
-            Image(systemName: "square.and.arrow.up")
-                .font(.system(size: height * 0.48, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .frame(width: height, height: height)
-                .modifier(ImageHeaderControlGlass())
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .tint(Theme.accent)
-        .accessibilityLabel("作家ページを共有")
+        ImageHeaderShareButton(url: URL(string: "https://komiflo.com")!
+            .appendingPathComponent("artists").appendingPathComponent(artist?.slug ?? slug),
+                               label: "作家ページを共有", height: height)
     }
 
     // MARK: - 作品
@@ -392,14 +383,18 @@ struct ImagePageHeader: View {
     let onFollow: (() -> Void)?
     let onBack: () -> Void
     var bannerURL: URL?
-    var bannerFocus: CGRect?
-    var bannerProtectedHead: CGRect?
     var magazineBranding: MagazineHeaderBranding?
     var countUnit = "作品"
+    /// 件数の代わりに名前の下へ出す文字（配信カレンダーの表示中の月など）
+    var countText: String?
+    /// 縮んだ帯で、件数を名前の下ではなく横に並べる
+    var compactCountInline = false
     var sourceTrailingInset: CGFloat = 124
     var sectionPicker: AnyView?
     var topTrailing: ((CGFloat) -> AnyView)?
     var followCrossesBoundary = false
+    /// フォローボタンの文字（特集のいいねでは「いいね済み」「いいね」）
+    var followTitles: (on: String, off: String) = ("フォロー中", "フォロー")
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var followSize: CGSize = .zero
 
@@ -434,7 +429,8 @@ struct ImagePageHeader: View {
                                            width: width, scroll: scroll, layout: layout)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    ArtistCompactTitle(name: artist?.name ?? title, total: total, scroll: scroll, layout: layout, countUnit: countUnit)
+                    ArtistCompactTitle(name: artist?.name ?? title, count: countLabel, scroll: scroll, layout: layout,
+                                       inline: compactCountInline)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if followCrossesBoundary {
@@ -534,18 +530,22 @@ struct ImagePageHeader: View {
         .accessibilityHidden(scroll.nameCut(in: layout) >= scroll.nameHeight / 2)
     }
 
+    private var countLabel: String? {
+        countText ?? total.map { "\($0)\(countUnit)" }
+    }
+
     @ViewBuilder
     private var countContent: some View {
-        if let total {
-            countRow(total)
+        if let countLabel {
+            countRow(countLabel)
                 .allowsHitTesting(countIsBelowBoundary)
                 .accessibilityHidden(!countIsBelowBoundary)
         }
     }
 
-    private func countRow(_ total: Int) -> some View {
+    private func countRow(_ label: String) -> some View {
         HStack(spacing: 8) {
-            Text("\(total)\(countUnit)")
+            Text(label)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.85))
                 .shadow(color: .black.opacity(0.7), radius: 3)
@@ -568,16 +568,17 @@ struct ImagePageHeader: View {
     @ViewBuilder
     private var followContent: some View {
         if let onFollow {
-            FollowButton(isFollowing: isFollowing, animated: followAnimated, action: onFollow)
+            FollowButton(isFollowing: isFollowing, animated: followAnimated,
+                         onTitle: followTitles.on, offTitle: followTitles.off, action: onFollow)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { followSize = $0 }
         }
     }
 
     private var bannerBackground: some View {
-        return CachedImage(url: bannerURL, focusRegion: bannerFocus, protectedHead: bannerProtectedHead) {
+        return CachedImage(url: bannerURL) {
             LinearGradient(colors: [Theme.placeholder, Theme.bar], startPoint: .leading, endPoint: .trailing)
         }
-        .frame(width: width, height: bannerFocus == nil ? layout.expandedHeight : bannerHeight)
+        .frame(width: width, height: layout.expandedHeight)
         .clipped()
         .blur(radius: 12 * progress, opaque: true)
         .background(Theme.bar)
@@ -640,32 +641,73 @@ private struct ArtistSocialLinks: View {
     }
 }
 
+/// 帯の右上の共有ボタン（作家・特集で共用。戻るボタンと同じガラスの丸）
+struct ImageHeaderShareButton: View {
+    let url: URL
+    let label: String
+    let height: CGFloat
+
+    var body: some View {
+        ShareLink(item: url) {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: height * 0.48, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: height, height: height)
+                .modifier(ImageHeaderControlGlass())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .tint(Theme.accent)
+        .accessibilityLabel(label)
+    }
+}
+
 /// 元の文字と同じバー下端で切り、上側も一つの境界から登らせる。
 private struct ArtistCompactTitle: View {
     let name: String
-    let total: Int?
+    let count: String?
     @ObservedObject var scroll: ArtistHeaderScroll
     let layout: ArtistHeaderLayout
-    var countUnit = "作品"
+    /// 件数を名前の横に並べる（名前と一緒に登る）
+    var inline = false
     @State private var nameHeight: CGFloat = 23
     @State private var countHeight: CGFloat = 16
 
-    private var nameTop: CGFloat { max(0, (ArtistHeaderLayout.controlsHeight - nameHeight - (total == nil ? 0 : countHeight + 1)) / 2) }
+    private var nameTop: CGFloat {
+        max(0, (ArtistHeaderLayout.controlsHeight - nameHeight - (count == nil || inline ? 0 : countHeight + 1)) / 2)
+    }
     private var crossingY: CGFloat {
         ArtistHeaderLayout.controlsHeight + 8 - layout.offset(scroll.offset)
+    }
+    private var nameY: CGFloat { max(nameTop, crossingY) }
+    /// 縦に並べるときと同じく、帯の中の件数が境界を越えた分だけ下から登り、名前の横で止まる
+    private var inlineCountY: CGFloat {
+        max(nameTop, crossingY + scroll.nameHeight + ArtistHeaderLayout.textSpacing)
     }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Text(name)
-                .font(.system(size: 19, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { nameHeight = $0 }
-                .offset(y: max(nameTop, crossingY))
-                .accessibilityHidden(scroll.nameCut(in: layout) == 0)
-            if let total {
-                Text("\(total)\(countUnit)")
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(name)
+                    .font(.system(size: 19, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { nameHeight = $0 }
+                if inline, let count {
+                    // 横に並べても、登り始めは帯の中の件数が境界を越えたとき（名前より件数の行の分だけ遅い）
+                    Text(count)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .offset(y: inlineCountY - nameY)
+                        .accessibilityHidden(scroll.countCut(in: layout) == 0)
+                }
+            }
+            .offset(y: nameY)
+            .accessibilityHidden(scroll.nameCut(in: layout) == 0)
+            if !inline, let count {
+                Text(count)
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)

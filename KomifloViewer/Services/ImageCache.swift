@@ -11,12 +11,10 @@ final class ImageCache: @unchecked Sendable {
 
     final class Thumbnail: NSObject, @unchecked Sendable {
         let image: UIImage
-        let fingerprint: String
         let magazineLogos: [Int: UIImage]
 
         init(image: UIImage, data: Data, isMagazineLogo: Bool) {
             self.image = image
-            fingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             magazineLogos = isMagazineLogo ? MagazineLogoRaster.images(data: data) : [:]
         }
     }
@@ -158,8 +156,6 @@ struct CachedImage<Placeholder: View>: View {
     var fitsHeight = false
     /// 縦に並んだ画像の指定した段だけを、表示枠の高さで切り出す。
     var spriteRow: Int?
-    var focusRegion: CGRect?
-    var protectedHead: CGRect?
     /// 画像を取れなかったとき（代わりの画像に切り替えたいときに使う）
     var onFailure: (() -> Void)? = nil
     @ViewBuilder let placeholder: () -> Placeholder
@@ -167,12 +163,10 @@ struct CachedImage<Placeholder: View>: View {
     @State private var image: UIImage?
     @State private var loadedKey: String?
 
-    init(url: URL?, fitsHeight: Bool = false, spriteRow: Int? = nil, focusRegion: CGRect? = nil, protectedHead: CGRect? = nil, onFailure: (() -> Void)? = nil, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+    init(url: URL?, fitsHeight: Bool = false, spriteRow: Int? = nil, onFailure: (() -> Void)? = nil, @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.url = url
         self.fitsHeight = fitsHeight
         self.spriteRow = spriteRow
-        self.focusRegion = focusRegion
-        self.protectedHead = protectedHead
         self.onFailure = onFailure
         self.placeholder = placeholder
         let cached = ImageCache.shared.memoryImage(for: url)
@@ -186,19 +180,7 @@ struct CachedImage<Placeholder: View>: View {
         Group {
             // 部品の差し替えでも、準備済みの画像は取得タスクを待たずに表示する。
             if let image = loadedKey == key ? image : ImageCache.shared.memoryImage(for: url) {
-                if let focusRegion {
-                    GeometryReader { geometry in
-                        let crop = HeaderThumbnailCrop.rect(image: image.size, viewport: geometry.size,
-                                                            focus: focusRegion, protectedHead: protectedHead)
-                        let width = geometry.size.width / crop.width
-                        let height = geometry.size.height / crop.height
-                        Image(uiImage: image)
-                            .resizable()
-                            .frame(width: width, height: height)
-                            .position(x: width * (0.5 - crop.minX), y: height * (0.5 - crop.minY))
-                    }
-                    .clipped()
-                } else if let spriteRow {
+                if let spriteRow {
                     GeometryReader { geometry in
                         // 全体の高さは画像から求める。段が増えても中央で切れないようにする。
                         Image(uiImage: image)

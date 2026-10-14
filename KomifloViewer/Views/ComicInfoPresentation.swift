@@ -19,7 +19,7 @@ private struct ComicInfoPresentation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.openRoute) { route in
-                if route.hasImageHeader {
+                if route.opensFullScreen {
                     artistRequest = ComicInfoRequest(route: route)
                 } else if case .comic = route {
                     request = ComicInfoRequest(route: route)
@@ -65,7 +65,8 @@ private struct ComicInfoSheet: View {
         }
     }
 
-    private var isImageHeader: Bool { route.hasImageHeader }
+    /// 全画面で開いた画面は、閉じるボタンの代わりに各画面の戻るボタンと下への引っ張りで閉じる
+    private var isImageHeader: Bool { route.opensFullScreen }
 
     var body: some View {
         NavigationStack(path: $path) {

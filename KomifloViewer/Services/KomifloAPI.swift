@@ -95,6 +95,8 @@ enum KomifloAPIError: LocalizedError {
 @MainActor
 final class KomifloAPI: NSObject, ObservableObject {
     @Published private(set) var requiresLogin = false
+    /// ログイン中だが読み放題の期間が切れている（公式の can_view_contents が false）
+    @Published private(set) var requiresSubscription = false
     private var isInvalidated = false
     private var loginCheck: Task<KFUser, Error>?
     private lazy var nativeTransport = NativeReaderService()
@@ -114,6 +116,8 @@ final class KomifloAPI: NSObject, ObservableObject {
             throw KomifloAPIError.notLoggedIn
         }
         requiresLogin = false
+        // 保存してある前回の応答では決めず、公式から取り直した結果だけを入口へ伝える
+        if !APICache.cacheOnly { requiresSubscription = user.canViewContents == false }
         return user
     }
 
@@ -411,6 +415,16 @@ final class KomifloAPI: NSObject, ObservableObject {
     }
 
     /// ログアウト（公式のメニューの「ログアウト」と同じリクエスト）
+    /// 公式の「スペシャルコンテンツ」の記事一覧（配信カレンダーなど）。公式Webと同じく分類3518を使い、本文も一緒に届く
+    func specialContents() async throws -> [KFArticle] {
+        try await get("/attribute/id/3518/content?page_size=999", as: KFArticleListResponse.self).results ?? []
+    }
+
+    /// 以前に契約していたか（購読の案内の文言を公式と同じ条件で出し分ける）。支払いの情報なので端末に保存しない
+    func hadSubscription() async throws -> Bool {
+        try await get("/billing/subscription", as: KFSubscriptionResponse.self, saves: false).hadSubscription
+    }
+
     func logout() async throws {
         let result = try await request("POST", "/session/logout", body: [:], as: KFSuccessResponse.self)
         guard result.success != false else { throw KomifloAPIError.invalidResponse }
@@ -428,6 +442,19 @@ final class KomifloAPI: NSObject, ObservableObject {
     }
 
     /// 作家・タグをフォロー / フォロー解除（公式のフォローボタンと同じリクエスト）
+    /// 特集（公開の読書リスト）のいいね / いいねの取り消し（公式の特集のいいねボタンと同じリクエスト）
+    func setReadingListLiked(_ liked: Bool, readingListID: Int, userID: Int) async throws {
+        let response: KFSuccessResponse
+        if liked {
+            response = try await request("POST", "/user/id/\(userID)/reading_lists/likes",
+                                         body: ["reading_list": readingListID], as: KFSuccessResponse.self)
+        } else {
+            response = try await request("DELETE", "/user/id/\(userID)/reading_lists/likes/\(readingListID)",
+                                         as: KFSuccessResponse.self)
+        }
+        guard response.success != false else { throw KomifloAPIError.invalidResponse }
+    }
+
     func setFollowing(_ following: Bool, attributeID: Int, userID: Int) async throws {
         let response: KFSuccessResponse
         if following {
@@ -558,6 +585,10 @@ struct KFReadingListResponse: Decodable {
         let contents: [KFContent]?
         /// コレクションの名前（公式は "タイトル|サブタイトル|…" の形）
         let name: String?
+        /// 特集のいいね（公式は公開の特集＝list_type "public" だけにいいねボタンを出す）
+        var liked: Bool? = nil
+        var likesCount: Int? = nil
+        var listType: String? = nil
     }
 }
 
@@ -851,6 +882,20 @@ struct KFSearchAttribute: Decodable, Identifiable, Hashable {
     let data: KFAttributeRef.Name?
 
     var name: String { data?.name ?? slug ?? "" }
+}
+
+/// スペシャルコンテンツの記事（attribute/id/3518/content）
+struct KFArticleListResponse: Decodable {
+    let results: [KFArticle]?
+}
+
+struct KFArticle: Decodable {
+    let id: Int
+    let slug: String?
+    let body: String?
+    let data: Info?
+
+    struct Info: Decodable { let title: String? }
 }
 
 struct KFSearchAttributeResponse: Decodable {

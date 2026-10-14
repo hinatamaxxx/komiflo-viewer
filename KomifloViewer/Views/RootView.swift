@@ -14,6 +14,8 @@ struct RootView: View {
 
     private enum LoginState {
         case checking, loggedIn, loggedOut, unavailable
+        /// ログイン中だが読み放題の期間が切れている（公式の購読の案内を出す）
+        case subscriptionRequired
     }
 
     @StateObject private var library = LibraryStore(api: KomifloAPI())
@@ -38,7 +40,6 @@ struct RootView: View {
     @State private var webPage: WebPage?
     @State private var loginState: LoginState = .checking
     @State private var loginError: String?
-    @State private var completedBrowserLogin = false
 
     var body: some View {
         ZStack {
@@ -48,23 +49,29 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Theme.background.ignoresSafeArea())
             case .loggedOut:
-                loginPrompt
+                // ログインが必要なら、最初からアプリ内のブラウザで公式のログインページを出す。
+                // 戻る先が無いので閉じるボタンは出さない
+                WebSheet(url: URL(string: "https://komiflo.com/#!/login")!, title: "ログイン", closable: false) {
+                    guard loginState == .loggedOut else { return }
+                    // 読み放題の期間が切れていないかも、起動時と同じ確認で決める
+                    loginState = .checking
+                    Task { await checkLogin() }
+                }
             case .unavailable:
                 connectionPrompt
             case .loggedIn:
                 tabs
+            case .subscriptionRequired:
+                SubscriptionRequiredView(api: library.api)
             }
         }
 
         .sheet(item: $webPage, onDismiss: {
-            if completedBrowserLogin { completedBrowserLogin = false }
-            else { Task { await checkLogin() } }
+            Task { await checkLogin() }
         }) { page in
-            WebSheet(url: page.url, title: page.isLogin ? "ログイン" : "Komiflo", onLoggedIn: page.isLogin ? {
-                guard webPage?.id == page.id else { return }
-                completedBrowserLogin = true
-                loginState = .loggedIn
-                webPage = nil
+            WebSheet(url: page.url, requiresSubscription: true, onLoggedIn: page.returnsOnSubscription ? {
+                // 決済が済んだらブラウザを閉じる。閉じたときの確認（checkLogin）で通常のタブへ戻る
+                if webPage?.id == page.id { webPage = nil }
             } : nil)
         }
         // 漫画は全画面で開く（ビューアの「戻る」で閉じてアプリに戻る）
@@ -84,7 +91,7 @@ struct RootView: View {
         }
         // 公式メニューのストア・ミッション・アカウント設定は、公式のページをそのまま開く
         .environment(\.openOfficialPage) { url in
-            webPage = WebPage(url: url)
+            webPage = WebPage(url: url, returnsOnSubscription: loginState == .subscriptionRequired)
         }
         .environment(\.logout) {
             guard !isLoggingOut else { return }
@@ -103,7 +110,11 @@ struct RootView: View {
             Button("OK", role: .cancel) { logoutError = nil }
         } message: { Text(logoutError ?? "") }
         .onReceive(library.api.$requiresLogin) { required in
-            if required, loginState == .loggedIn { endSession() }
+            if required, loginState == .loggedIn || loginState == .subscriptionRequired { endSession() }
+        }
+        // 使っている途中で期間が切れたと分かったら、公式と同じく購読の案内へ切り替える
+        .onReceive(library.api.$requiresSubscription) { required in
+            if required, loginState == .loggedIn { loginState = .subscriptionRequired }
         }
         .task {
             if startsLoggedOut { loginState = .loggedOut }
@@ -271,36 +282,6 @@ struct RootView: View {
         }
     }
 
-    private var loginPrompt: some View {
-        VStack(spacing: 20) {
-            VStack(spacing: 12) {
-                Image(systemName: "person.crop.circle.badge.questionmark")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.secondary)
-                Text("Komifloにログイン")
-                    .font(.headline)
-                Text("ボタンを押すと、アプリ内のブラウザでKomifloを開きます。\nログイン後は自動でアプリに戻ります。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Button {
-                webPage = WebPage(url: URL(string: "https://komiflo.com/#!/login")!, isLogin: true)
-            } label: {
-                Text("ログイン画面を開く")
-                    .font(.headline)
-                    .frame(maxWidth: 240)
-                    .padding(.vertical, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.accent)
-        }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: 360)
-        .padding(.horizontal, 32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background.ignoresSafeArea())
-    }
-
     private var connectionPrompt: some View {
         VStack(spacing: 20) {
             Image(systemName: "wifi.exclamationmark")
@@ -325,15 +306,15 @@ struct RootView: View {
     private func checkLogin() async {
         loginError = nil
         do {
-            _ = try await library.api.currentUser()
-            loginState = .loggedIn
+            let user = try await library.api.currentUser()
+            loginState = user.canViewContents == false ? .subscriptionRequired : .loggedIn
         } catch KomifloAPIError.notLoggedIn {
             endSession()
         } catch is CancellationError {
         } catch {
             loginError = error.localizedDescription
             // 通信失敗だけで、確認済みのログインや表示中の画面を捨てない。
-            if loginState != .loggedIn { loginState = .unavailable }
+            if loginState != .loggedIn, loginState != .subscriptionRequired { loginState = .unavailable }
         }
     }
 
@@ -544,6 +525,8 @@ struct RouteView: View {
         case .history:
             RemoteComicList(kind: .history, library: library, isActive: true, refreshLoaded: false)
                 .menuPage("閲覧履歴")
+        case .deliveryCalendar(let slug):
+            DeliveryCalendarView(initialSlug: slug, library: library, headerImageURL: headerImageURL)
         }
     }
 }
@@ -551,7 +534,8 @@ struct RouteView: View {
 struct WebPage: Identifiable {
     let id = UUID()
     let url: URL
-    var isLogin = false
+    /// 期間切れの案内から開いたページ。決済などで読み放題が使えるようになったら閉じてアプリへ戻る
+    var returnsOnSubscription = false
 }
 
 /// ログイン・アカウント設定など、アプリにしていない画面をブラウザ表示で開く
@@ -559,19 +543,26 @@ struct WebSheet: View {
     let url: URL
     var title: String = "Komiflo"
     var initialFocusSelector: String?
+    /// ログインが必要なときに画面全体へ出す場合は、戻る先が無いので閉じるボタンを出さない
+    var closable = true
+    /// trueなら、ログインしただけでなく読み放題が使えるようになったときにonLoggedInを呼ぶ
+    var requiresSubscription = false
     var onLoggedIn: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            SimpleWebView(url: url, initialFocusSelector: initialFocusSelector, onLoggedIn: onLoggedIn)
+            SimpleWebView(url: url, initialFocusSelector: initialFocusSelector, requiresSubscription: requiresSubscription,
+                          onLoggedIn: onLoggedIn)
                 .ignoresSafeArea(initialFocusSelector == nil ? .all : .container, edges: .bottom)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .darkNavigationBar()
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("閉じる") { dismiss() }
+                    if closable {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("閉じる") { dismiss() }
+                        }
                     }
                 }
         }
@@ -581,6 +572,7 @@ struct WebSheet: View {
 private struct SimpleWebView: UIViewControllerRepresentable {
     let url: URL
     let initialFocusSelector: String?
+    let requiresSubscription: Bool
     let onLoggedIn: (() -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -656,7 +648,7 @@ private struct SimpleWebView: UIViewControllerRepresentable {
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)
         if let onLoggedIn {
-            context.coordinator.observeLogin(webView, onLoggedIn: onLoggedIn)
+            context.coordinator.observeLogin(webView, requiresSubscription: requiresSubscription, onLoggedIn: onLoggedIn)
         }
         let controller = WebViewController(webView: webView)
         controller.onVisibilityChanged = { [weak coordinator = context.coordinator, weak webView] visible in
@@ -757,14 +749,18 @@ private struct SimpleWebView: UIViewControllerRepresentable {
         private var focusIsPending = false
         private var inputGeneration = 0
 
-        func observeLogin(_ webView: WKWebView, onLoggedIn: @escaping () -> Void) {
+        func observeLogin(_ webView: WKWebView, requiresSubscription: Bool, onLoggedIn: @escaping () -> Void) {
             let transport = NativeReaderService()
             loginTransport = transport
             loginCompletion = LoginCompletion(check: {
                 do {
                     let data = try await transport.apiData(url: URL(string: "https://api.komiflo.com/session/user")!,
                                                           method: "GET", withCredentials: true, body: nil)
-                    return try JSONDecoder().decode(KFSessionResponse.self, from: data).loggedInUser != nil
+                    let decoder = JSONDecoder()
+                    decoder.keyDecodingStrategy = .convertFromSnakeCase
+                    guard let user = try decoder.decode(KFSessionResponse.self, from: data).loggedInUser else { return false }
+                    // 決済の完了は、公式Webと同じく can_view_contents が true になったことで判断する
+                    return !requiresSubscription || user.canViewContents == true
                 } catch { return false }
             }, onCompleted: onLoggedIn)
             let store = webView.configuration.websiteDataStore.httpCookieStore

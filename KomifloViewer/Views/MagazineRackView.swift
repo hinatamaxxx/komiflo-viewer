@@ -218,12 +218,18 @@ struct IssueShelf: View {
     let issue: KFContent
     let library: LibraryStore
     let magazine: MagazineIdentity?
+    /// 見出し（無ければ公式の号の名前）と、横に添える文字
+    var title: String?
+    var detail: String?
 
     @State private var comics: [ComicSummary]
 
-    init(issue: KFContent, library: LibraryStore, magazine: MagazineIdentity? = nil) {
+    init(issue: KFContent, library: LibraryStore, magazine: MagazineIdentity? = nil,
+         title: String? = nil, detail: String? = nil) {
         self.issue = issue
         self.library = library
+        self.title = title
+        self.detail = detail
         self.magazine = magazine ?? MagazineIdentity.resolve(slug: issue.magazineSlug, issue: issue.title)
         // 一度取った号の中身（端末内に保存してある分も）は、画面を作った瞬間から出す（読み込み中の表示を出さない）
         _comics = State(initialValue: library.cachedIssueComics(issueID: issue.id) ?? [])
@@ -233,19 +239,25 @@ struct IssueShelf: View {
         Group {
             if comics.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(issue.title ?? "")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.sectionTitle)
-                        .padding(.horizontal, 15)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(title ?? issue.title ?? "")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.sectionTitle)
+                        if let detail {
+                            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 15)
                     Theme.bar
                         .frame(height: OfficialMetrics.cardWidth / coverAspect + 30)
                         .overlay(ProgressView())
                 }
             } else {
                 CoverShelf(
-                    title: issue.title ?? "",
+                    title: title ?? issue.title ?? "",
                     comics: comics,
-                    library: library, showsMagazineLogo: true, magazine: magazine, magazineLogoAtBottom: true
+                    library: library, detail: detail, showsMagazineLogo: true, magazine: magazine,
+                    magazineLogoAtBottom: true
                 )
             }
         }
@@ -255,6 +267,52 @@ struct IssueShelf: View {
             if fresh.map(\.id) != comics.map(\.id) || comics.contains(where: \.isCoverExpired) {
                 comics = fresh
             }
+        }
+    }
+}
+
+/// 雑誌のページで、号の書き方と配信日をそろえて出す。
+/// 公式の号の名前は雑誌ごとに「快楽天 2026.11」「異世快楽天 Vol.62」「ゼロス #140」「WEEKLY快楽天 2026 No.38」と違うので、
+/// 号の部分だけを読み「2026年11月号」「第62号」「2026年 第38号」にする。読めない名前は公式のまま
+enum IssueLabel {
+    static func title(_ name: String?) -> String? {
+        guard let name else { return nil }
+        if let match = groups(#"(\d{4})\s*No\.?\s*(\d+)\s*$"#, in: name) {
+            return "\(match[0])年 第\(match[1])号"
+        }
+        if let match = groups(#"(\d{4})\.(\d{1,2})\s*$"#, in: name), let month = Int(match[1]) {
+            return "\(match[0])年\(month)月号"
+        }
+        if let match = groups(#"(?:vol\.?|#)\s*(\d+)\s*$"#, in: name), let number = Int(match[0]) {
+            return "第\(number)号"
+        }
+        return name
+    }
+
+    /// 配信日（日本時間）。例：2026/9/28 配信
+    static func release(_ date: Date?) -> String? {
+        date.map { format("yyyy/M/d", $0) + " 配信" }
+    }
+
+    /// 例：2026年9月
+    static func month(_ date: Date?) -> String? {
+        date.map { format("yyyy年M月", $0) }
+    }
+
+    private static func format(_ pattern: String, _ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "ja_JP")
+        formatter.timeZone = TimeZone(identifier: "Asia/Tokyo")
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
+    }
+
+    private static func groups(_ pattern: String, in text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            Range(match.range(at: index), in: text).map { String(text[$0]) }
         }
     }
 }

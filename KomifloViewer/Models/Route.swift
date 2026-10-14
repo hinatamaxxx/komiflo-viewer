@@ -84,6 +84,14 @@ enum Route: Hashable {
     case appSettings
     case bookmarks
     case history
+    /// 雑誌の配信カレンダー（公式の /articles と /articles/magazine-schedule-YYMM）。slugは最初に開く月
+    case deliveryCalendar(slug: String?)
+
+    /// 下から全画面で開き、下へ引っ張って閉じる画面（縮むヘッダーの一覧と、配信カレンダー）
+    var opensFullScreen: Bool {
+        if case .deliveryCalendar = self { return true }
+        return hasImageHeader
+    }
 
     var hasImageHeader: Bool {
         switch self {
@@ -122,6 +130,11 @@ enum Route: Hashable {
         case "collection" where parts.count >= 2:
             guard let id = Int(parts[1]) else { return nil }
             self = .collection(id: id, title: title)
+        case "articles" where parts.count == 1:
+            // 公式ホームの「配信カレンダー」バナーは記事一覧へ向いている。アプリでは配信カレンダーを開く
+            self = .deliveryCalendar(slug: nil)
+        case "articles" where parts[1].hasPrefix(DeliverySchedule.slugPrefix):
+            self = .deliveryCalendar(slug: parts[1])
         case "magazines" where parts.count >= 2:
             // /magazines/titles/<slug> と /magazines/<slug> の両方がある
             let slug = parts[1] == "titles" && parts.count >= 3 ? parts[2] : parts[1]

@@ -211,6 +211,10 @@ struct ComicDetailView: View {
     // MARK: - 読み込み
 
     private func load() async {
+        // 保存してある前回の作品情報があればすぐ出し、公式から取り直して差し替える
+        if case .loading = state, let saved = try? await APICache.fromCache({ try await library.api.content(id: comicID) }) {
+            state = .loaded(saved)
+        }
         do {
             let content = try await library.api.content(id: comicID)
             state = .loaded(content)
@@ -220,6 +224,9 @@ struct ComicDetailView: View {
                     .filter { $0.id != comicID && !$0.title.contains("表紙") }
             }
         } catch {
+            guard !(error is CancellationError) else { return }
+            // 前回の作品情報が出ていれば、取り直しに失敗してもそのまま
+            if case .loaded = state { return }
             state = .failed(error.localizedDescription)
         }
     }

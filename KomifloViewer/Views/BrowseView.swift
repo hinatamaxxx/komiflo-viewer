@@ -609,19 +609,30 @@ struct MagazineIssuesView: View {
     var headerImageURL: URL?
     @Environment(\.dismiss) private var dismiss
 
-    @State private var state: LoadState<[KFContent]> = .loading
+    /// 一度表示した雑誌の号の一覧（アプリを閉じるまで）。もう一度開いたときは待たずにすぐ出す
+    @MainActor private static var cachedIssues: [String: [KFContent]] = [:]
+
+    @State private var state: LoadState<[KFContent]>
+
+    init(magazine: MagazineTitle, library: LibraryStore, headerImageURL: URL? = nil) {
+        self.magazine = magazine
+        self.library = library
+        self.headerImageURL = headerImageURL
+        _state = State(initialValue: Self.cachedIssues[magazine.slug].map { .loaded($0) } ?? .loading)
+    }
+
     /// 号の棚は見えるところから少しずつ増やす
     @State private var visibleCount = 6
-    @State private var headerThumbnail: TagHeaderThumbnail.Selection?
+    /// 雑誌のバナーが無いとき、最新号の表紙の作家のプロフィール画像
+    @State private var coverAuthorImageURL: URL?
 
     var body: some View {
         ImageHeaderPage { width, layout, scroll in
             ImagePageHeader(artist: nil, title: magazine.name, total: issueCount,
                             width: width, layout: layout, scroll: scroll, isFollowing: false,
                             followAnimated: false, onFollow: nil, onBack: { dismiss() },
-                            bannerURL: headerThumbnail?.url,
-                            bannerFocus: headerThumbnail?.focus,
-                            bannerProtectedHead: headerThumbnail?.protectedHead,
+                            // ピックアップの「雑誌」と同じバナー。無い雑誌は最新号の表紙の作家、それも無ければ画像なしの帯
+                            bannerURL: headerImageURL ?? magazineBanner ?? coverAuthorImageURL,
                             magazineBranding: MagazineIdentity.rows[magazine.slug] == nil ? nil
                                 : MagazineHeaderBranding(slug: magazine.slug, name: magazine.name),
                             countUnit: "号",
@@ -630,9 +641,12 @@ struct MagazineIssuesView: View {
             LoadStateView(state: state, retry: load) { issues in
                 LazyVStack(alignment: .leading, spacing: 24) {
                     ForEach(Array(issues.prefix(visibleCount)), id: \.id) { issue in
+                        // 雑誌のページでは号の書き方をそろえ、配信日を横に添える
                         IssueShelf(issue: issue, library: library,
                                    magazine: magazine.isSpecial ? nil
-                                       : MagazineIdentity.display(slug: magazine.slug, issue: magazine.name))
+                                       : MagazineIdentity.display(slug: magazine.slug, issue: magazine.name),
+                                   title: magazine.isSpecial ? nil : IssueLabel.title(issue.title),
+                                   detail: IssueLabel.release(issue.published))
                             .onAppear {
                                 if issue.id == issues.prefix(visibleCount).last?.id, visibleCount < issues.count {
                                     visibleCount += 6
@@ -653,21 +667,23 @@ struct MagazineIssuesView: View {
             .frame(minHeight: minimumHeight, alignment: .top)
         }
         .background(Theme.background.ignoresSafeArea())
-        .task { if case .loading = state { await load() } }
-        .task(id: headerImageURL ?? magazine.coverURL) {
-            let url = headerImageURL ?? magazine.coverURL
-            do {
-                let thumbnail = try await TagHeaderThumbnail.select(url: url)
-                guard !Task.isCancelled else { return }
-                headerThumbnail = thumbnail
-            } catch {
-                guard !Task.isCancelled else { return }
-                headerThumbnail = url.map { .init(url: $0, focus: nil, protectedHead: nil) }
-                library.actionError = error.localizedDescription
-            }
+        // 表示済みの一覧があっても、裏で公式から取り直して変わっていれば差し替える
+        .task { await load() }
+        .task(id: latestIssueID) {
+            guard headerImageURL == nil, magazineBanner == nil, let latestIssueID else { return }
+            // 号の棚と同じ取得（取得済みなら通信しない）。表紙の作品の作家を帯に使う
+            let cover = await library.issueComics(issueID: latestIssueID)?.first { $0.title.contains("表紙") }
+            await ArtistProfileImage.load(authorSlug: cover?.authorSlug, api: library.api) { coverAuthorImageURL = $0 }
         }
         .markErrorAlert(library)
         .refreshable { await load() }
+    }
+
+    private var magazineBanner: URL? { HomeBanner.magazineBanners[magazine.slug] }
+
+    private var latestIssueID: Int? {
+        if case .loaded(let issues) = state { return issues.first?.id }
+        return nil
     }
 
     private var issueCount: Int? {
@@ -677,49 +693,69 @@ struct MagazineIssuesView: View {
 
     /// 最後に「これで全部」と分かるように
     private func endNote(_ issues: [KFContent]) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: "checkmark.circle")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text(issues.isEmpty
-                 ? "公開中の号はありません"
-                 : "Komifloで読めるバックナンバーは、この\(issues.count)号ですべてです")
-                .font(.footnote.weight(.semibold))
-            if let oldest = issues.last?.published, let newest = issues.first?.published, issues.count > 1 {
-                Text("\(oldest.formatted(.dateTime.year().month())) 〜 \(newest.formatted(.dateTime.year().month()))に出た号")
-                    .font(.caption)
+        VStack(spacing: 8) {
+            Image(systemName: issues.isEmpty ? "tray" : "checkmark.seal.fill")
+                .font(.title2)
+                .foregroundStyle(issues.isEmpty ? Color.secondary : Theme.accent)
+            Text(issues.isEmpty ? "公開中の号はありません" : "バックナンバーはここまで")
+                .font(.subheadline.weight(.bold))
+            if !issues.isEmpty {
+                Text("Komifloで読めるのは全\(issues.count)号です")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            if let oldest = IssueLabel.month(issues.last?.published),
+               let newest = IssueLabel.month(issues.first?.published), issues.count > 1 {
+                Text("\(oldest) 〜 \(newest) 配信")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
+        .background(Theme.bar, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 15)
+        .padding(.top, 8)
     }
 
+    /// 前回の一覧（メモリ、無ければ保存してある前回の応答）をすぐ出し、公式から取り直して変わっていれば差し替える
     private func load() async {
+        if case .loading = state, let saved = try? await APICache.fromCache({ try await fetchIssues() }) {
+            state = .loaded(saved)
+        }
         do {
-            let attributeIDs: [Int]
-            if magazine.isSpecial {
-                // 特別号の棚は、特別号・アンソロジーなどの分類をまとめたもの（サイトと同じ）
-                attributeIDs = try await library.api.magazines()
-                    .filter { attribute in
-                        guard let slug = attribute.slug else { return false }
-                        return slug == "xtc" || slug == "wani-anthology" || slug.hasSuffix("-special-issue")
-                    }
-                    .map(\.id)
-            } else {
-                attributeIDs = [try await library.api.attribute(slug: magazine.slug).id]
-            }
-            let calendar = Calendar(identifier: .gregorian)
-            let newest = calendar.date(byAdding: .day, value: 2, to: Date())!
-            let oldest = calendar.date(from: DateComponents(year: 2000, month: 1, day: 1))!
-            let issues = try await library.api.magazineIssues(attributeIDs: attributeIDs, from: newest, to: oldest)
-                .filter { $0.type == nil || $0.type == "volume" }
-                .sorted { ($0.published ?? .distantPast) > ($1.published ?? .distantPast) }
-            visibleCount = 6
+            let issues = try await fetchIssues()
+            Self.cachedIssues[magazine.slug] = issues
+            if case .loaded(let current) = state, current.map(\.id) == issues.map(\.id) { return }
             state = .loaded(issues)
         } catch {
+            guard !(error is CancellationError) else { return }
+            // 前回の一覧が出ていれば、取り直しに失敗してもそのまま
+            if case .loaded = state { return }
             state = .failed(error.localizedDescription)
         }
+    }
+
+    private func fetchIssues() async throws -> [KFContent] {
+        let attributeIDs: [Int]
+        if magazine.isSpecial {
+            // 特別号の棚は、特別号・アンソロジーなどの分類をまとめたもの（サイトと同じ）
+            attributeIDs = try await library.api.magazines()
+                .filter { attribute in
+                    guard let slug = attribute.slug else { return false }
+                    return slug == "xtc" || slug == "wani-anthology" || slug.hasSuffix("-special-issue")
+                }
+                .map(\.id)
+        } else {
+            attributeIDs = [try await library.api.attribute(slug: magazine.slug).id]
+        }
+        let calendar = Calendar(identifier: .gregorian)
+        let newest = calendar.date(byAdding: .day, value: 2, to: Date())!
+        let oldest = calendar.date(from: DateComponents(year: 2000, month: 1, day: 1))!
+        return try await library.api.magazineIssues(attributeIDs: attributeIDs, from: newest, to: oldest)
+            .filter { $0.type == nil || $0.type == "volume" }
+            .sorted { ($0.published ?? .distantPast) > ($1.published ?? .distantPast) }
     }
 }
 
@@ -898,14 +934,23 @@ struct TagListView: View {
         }
     }
 
+    /// 保存してある前回の一覧をすぐ出し、公式から取り直して変わっていれば差し替える
     private func load() async {
+        let api = library.api
+        let sort = sort
+        func ordered(_ tags: [KFAttribute]) -> [KFAttribute] {
+            sort == .related ? Self.sortedByRelated(tags) : tags
+        }
+        if case .loading = state, let saved = try? await APICache.fromCache({ try await api.tags(sort: sort.cacheName) }) {
+            state = .loaded(ordered(saved))
+        }
         do {
-            var tags = try await library.api.tags(sort: sort.cacheName)
-            if sort == .related {
-                tags = Self.sortedByRelated(tags)
-            }
+            let tags = ordered(try await api.tags(sort: sort.cacheName))
+            if case .loaded(let current) = state, current.map(\.id) == tags.map(\.id) { return }
             state = .loaded(tags)
         } catch {
+            guard !(error is CancellationError) else { return }
+            if case .loaded = state { return }
             state = .failed(error.localizedDescription)
         }
     }

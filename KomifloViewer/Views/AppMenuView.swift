@@ -84,7 +84,14 @@ struct OfficialMenuView: View {
             }
             Section("KomifloViewer") {
                 Link(destination: URL(string: "https://github.com/hinatamaxxx/komiflo-viewer")!) {
-                    Label("GitHubリポジトリ", systemImage: "chevron.left.forwardslash.chevron.right")
+                    HStack {
+                        Label("GitHubリポジトリ", systemImage: "chevron.left.forwardslash.chevron.right")
+                        Spacer()
+                        // ブラウザで開く項目（公式のページと同じ印）
+                        Image(systemName: "safari")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 Button { showsLicenses = true } label: {
                     Label("ライセンス", systemImage: "doc.text")
@@ -98,7 +105,9 @@ struct OfficialMenuView: View {
         .navigationBarTitleDisplayMode(.inline)
         .darkNavigationBar()
         .navigationDestination(isPresented: $showsLicenses) { LicensesView() }
-        .confirmationDialog("ログアウトしますか？", isPresented: $isConfirmingLogout, titleVisibility: .visible) {
+        // 確認には「戻る」も必ず出す（iOS 26のconfirmationDialogはcancelのボタンを表示しないためalertにする）
+        .alert("ログアウトしますか？", isPresented: $isConfirmingLogout) {
+            Button("戻る", role: .cancel) { }
             Button("ログアウト", role: .destructive) { logout() }
         }
     }
@@ -147,6 +156,7 @@ private struct AppSettingsList: View {
     @AppStorage(TabBarStyle.styleKey) private var tabBarStyle = TabBarStyle.glass
     @AppStorage(TabBarStyle.iPadBottomKey) private var iPadTabsAtBottom = false
     @AppStorage(ControlsPosition.key) private var controlsAtBottom = false
+    @AppStorage(PickupSettings.collapsesMagazinesKey) private var pickupCollapsesMagazines = true
     @Environment(\.openReaderSettings) private var openReaderSettings
     @AppStorage(KeyboardFocus.onOpenSearchKey) private var focusOnOpenSearch = false
     @AppStorage(KeyboardFocus.onReselectKey) private var focusOnReselect = false
@@ -180,6 +190,14 @@ private struct AppSettingsList: View {
                 Text("表紙の棚")
             } footer: {
                 Text("向きの設定はオフで左から右へ並べます。横スクロールの設定はオフで自由にスクロールします。標準はどちらもオンです。")
+            }
+
+            Section {
+                Toggle("ピックアップの雑誌を折りたたむ", isOn: $pickupCollapsesMagazines)
+            } header: {
+                Text("ホーム")
+            } footer: {
+                Text("ピックアップを開いたときに、雑誌のバナーを閉じておきます。見出しを押すと開けます。標準はオンです。")
             }
 
             Section {

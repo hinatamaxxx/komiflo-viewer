@@ -14,17 +14,12 @@ targets:
     platform: iOS
     sources:
       - path: KomifloViewer
-        excludes:
-          - ThumbnailModels
-      - path: KomifloViewer/ThumbnailModels
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.komifloviewer.app
         PRODUCT_NAME: KomifloViewer
-        MARKETING_VERSION: "3.32.265"
-        CURRENT_PROJECT_VERSION: "372"
+        MARKETING_VERSION: "3.32.290"
+        CURRENT_PROJECT_VERSION: "397"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES

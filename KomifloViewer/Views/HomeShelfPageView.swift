@@ -12,16 +12,15 @@ struct HomeShelfPageView: View {
     @State private var order: HomeRankingOrder = .ranked
     @StateObject private var orderProgress = PagerProgress()
     @State private var referenceDate = Date()
-    @State private var headerThumbnail: TagHeaderThumbnail.Selection?
+    /// 先頭の作品の作家のプロフィール画像（無ければ画像なしの帯）
+    @State private var authorImageURL: URL?
 
     var body: some View {
         ImageHeaderPage(footerHeight: kind == .recent ? RankingOrderPicker.height : 0) { width, layout, scroll in
             ImagePageHeader(artist: nil, title: title, total: kind == .topical ? feed.total : homeComics.count,
                             width: width, layout: layout, scroll: scroll,
                             isFollowing: false, followAnimated: false, onFollow: nil,
-                            onBack: { dismiss() }, bannerURL: headerThumbnail?.url,
-                            bannerFocus: headerThumbnail?.focus,
-                            bannerProtectedHead: headerThumbnail?.protectedHead,
+                            onBack: { dismiss() }, bannerURL: authorImageURL,
                             sourceTrailingInset: 15 * OfficialMetrics.scale,
                             sectionPicker: kind == .recent ? AnyView(
                                 RankingOrderPicker(order: $order, progress: orderProgress)
@@ -53,17 +52,8 @@ struct HomeShelfPageView: View {
             }
         }
         .task { if kind == .topical { await load() } }
-        .task(id: homeComics.first?.coverURL) {
-            let url = homeComics.first?.coverURL
-            do {
-                let thumbnail = try await TagHeaderThumbnail.select(url: url)
-                guard !Task.isCancelled else { return }
-                headerThumbnail = thumbnail
-            } catch {
-                guard !Task.isCancelled else { return }
-                headerThumbnail = url.map { .init(url: $0, focus: nil, protectedHead: nil) }
-                library.actionError = error.localizedDescription
-            }
+        .task(id: homeComics.first?.authorSlug) {
+            await ArtistProfileImage.load(authorSlug: homeComics.first?.authorSlug, api: library.api) { authorImageURL = $0 }
         }
         .markErrorAlert(library)
     }

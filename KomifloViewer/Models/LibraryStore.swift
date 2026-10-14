@@ -663,6 +663,18 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    /// 特集のいいね。成功したらtrue、失敗したら知らせてfalse（表示を戻すのは呼び出し側）
+    func setReadingListLiked(_ liked: Bool, readingListID: Int) async -> Bool {
+        do {
+            let user = try await currentUser(forceReload: false)
+            try await api.setReadingListLiked(liked, readingListID: readingListID, userID: user.id)
+            return true
+        } catch {
+            actionError = "いいねを変更できませんでした。\n\(error.localizedDescription)"
+            return false
+        }
+    }
+
     // MARK: - 作家画像
 
     /// 作家の帯の画像（フォロー一覧のデータには画像が入っていないので、作家ごとに取って覚えておく）

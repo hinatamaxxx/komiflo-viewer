@@ -8,6 +8,8 @@ struct ChronologicalComicList: View {
     var loadsMoreAutomatically = true
     var emptyTitle = "作品がありません"
     var emptyMessage = "表示できる作品がありません。"
+    /// 作品IDごとの順位（ランキングの特集でサムネイルに順位を付ける）
+    var ranks: [Int: Int] = [:]
     let loadMore: () async -> Void
     @State private var isEndVisible = false
 
@@ -22,7 +24,7 @@ struct ChronologicalComicList: View {
                 EmptyState(title: emptyTitle, systemImage: "tray", message: emptyMessage).frame(height: 260)
             } else {
                 ComicGrid(comics: feed.comics, library: library,
-                          onLastAppear: { isEndVisible = true },
+                          onLastAppear: { isEndVisible = true }, ranks: ranks,
                           onLastDisappear: { isEndVisible = false }, showsMagazineLogo: true)
             }
             if feed.isLoading, !feed.comics.isEmpty {

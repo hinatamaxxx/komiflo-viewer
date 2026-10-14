@@ -10,6 +10,7 @@ extension SettingsDefaults {
         Field(key: TabBarStyle.styleKey, initial: .text(TabBarStyle.glass)),
         Field(key: TabBarStyle.iPadBottomKey, initial: .bool(false)),
         Field(key: ControlsPosition.key, initial: .bool(false)),
+        Field(key: PickupSettings.collapsesMagazinesKey, initial: .bool(true)),
         Field(key: KeyboardFocus.onOpenSearchKey, initial: .bool(false)),
         Field(key: KeyboardFocus.onReselectKey, initial: .bool(false)),
         Field(key: ImageCache.memoryLimitKey, initial: .number(Double(ImageCache.defaultMemoryMB))),

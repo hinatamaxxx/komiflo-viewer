@@ -590,6 +590,8 @@ struct CoverShelf: View {
     let title: String
     let comics: [ComicSummary]
     @ObservedObject var library: LibraryStore
+    /// 見出しの横に小さく添える文字（雑誌のページの配信日など）
+    var detail: String? = nil
     var captions: [Int: String] = [:]
     /// 順位を表紙に出す（ランキング用）
     var ranked = false
@@ -618,6 +620,12 @@ struct CoverShelf: View {
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.sectionTitle)
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer()
                 if let moreRoute {
                     Button {

@@ -11,6 +11,8 @@ struct KomifloViewerApp: App {
         UserDefaults.standard.removeObject(forKey: "artists.kana")
         // キーボードが出ているかの見張りを始める（スクロールでキーボードを閉じるときに使う）
         _ = KeyboardState.shared
+        // 外した帯の位置決めのモデル・判定結果が端末に残っていれば消す（裏で行い、起動を待たせない）
+        Task.detached(priority: .utility) { RetiredHeaderCaches.remove() }
     }
 
     var body: some Scene {
