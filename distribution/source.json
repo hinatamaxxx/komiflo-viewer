@@ -37,6 +37,15 @@
       ],
       "versions": [
         {
+          "version": "3.32.293",
+          "buildVersion": "400",
+          "date": "2026-10-14",
+          "localizedDescription": "ライセンスの表記に、日替わりの並び替えで使っているseedrandomを追加しました。動作は変わりません。",
+          "downloadURL": "https://github.com/hinatamaxxx/komiflo-viewer/releases/download/v3.32.293/KomifloViewer-3.32.293.ipa",
+          "size": 3533150,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "3.32.292",
           "buildVersion": "399",
           "date": "2026-10-14",

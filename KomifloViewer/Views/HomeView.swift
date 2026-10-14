@@ -474,7 +474,7 @@ struct HomeShelf: Identifiable {
     }
 }
 
-/// 日替わりの並び替え（日本時間の朝5時で切り替わる）
+/// 日替わりの並び替え（日本時間の朝5時で切り替わる）。乱数は seedrandom（ARC4）と互換
 struct DailyShuffle {
     private var bytes = Array(0..<256)
     private var i = 0
