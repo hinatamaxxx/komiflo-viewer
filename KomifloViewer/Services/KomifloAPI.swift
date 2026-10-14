@@ -161,12 +161,6 @@ final class KomifloAPI: NSObject, ObservableObject {
         try await get("/content/type/history/range", as: KFDateRange.self)
     }
 
-    /// 人気急上昇（公式ホームと同じ：直近28日の閲覧数順）
-    func popularChapters(days: Int = 28) async throws -> [KFContent] {
-        try await get(HomeShelfKind.recent.contentPath(attributeID: 0, page: 0, recentDays: days),
-                      as: KFContentListResponse.self).results ?? []
-    }
-
     func likedIDs(userID: Int) async throws -> [Int] {
         try await get("/user/id/\(userID)/bookmarks", as: KFLikesResponse.self).bookmarks ?? []
     }
@@ -176,21 +170,6 @@ final class KomifloAPI: NSObject, ObservableObject {
             throw KomifloAPIError.invalidResponse
         }
         return content
-    }
-
-    /// 作品の各ページの縮小画像の住所（公式のインデックスが使うものと同じ。並べ替えの保護がかかっていない、公式が配る縮小画像）。
-    /// ページの画像に関わるので、応答は端末に保存しない
-    func pageThumbnails(contentID: Int) async throws -> [URL] {
-        let response = try await get("/content/id/\(contentID)", as: KFPageImagesResponse.self, saves: false)
-        guard let content = response.content, let imgs = content.imgs else { return [] }
-        let base = content.cdnPublic?.isEmpty == false ? content.cdnPublic! : "https://image.komiflo-cdn.com/resized"
-        return imgs
-            .compactMap { key, img -> (Int, String)? in
-                guard let index = Int(key), let filename = img.filename else { return nil }
-                return (index, filename)
-            }
-            .sorted { $0.0 < $1.0 }
-            .compactMap { URL(string: "\(base)/396_desktop_medium_2x/\($0.1)") }
     }
 
     /// 雑誌の一覧（attribute "magazine" の子）
@@ -286,14 +265,6 @@ final class KomifloAPI: NSObject, ObservableObject {
         try await get("/content/id/\(contentID)/comments?page=\(page)", as: KFCommentsResponse.self)
     }
 
-    /// 読み終わりのページの「こちらもおすすめ」。公式ビューアと同じく、作品のタグの1つから13話を取る
-    func endPageRecommendations(tagID: Int) async throws -> [KFContent] {
-        try await get(
-            "/attribute/id/\(tagID)/content?page_size=13&filter=chapter+-plus",
-            as: KFContentListResponse.self
-        ).results ?? []
-    }
-
     /// その作品を読んだ人へのおすすめ
     func recommends(contentID: Int) async throws -> [KFContent] {
         try await get("/content/id/\(contentID)/recommends", as: KFRecommendsResponse.self).contents ?? []
@@ -349,17 +320,6 @@ final class KomifloAPI: NSObject, ObservableObject {
             throw KomifloAPIError.invalidResponse
         }
         return attribute
-    }
-
-    /// 公式ホームの「新着・話題の作品」と同じ取り方
-    func topicalChapters(attributeID: Int) async throws -> [KFContent] {
-        try await homeShelfContents(kind: .topical, attributeID: attributeID, page: 0).results ?? []
-    }
-
-    /// 公式ホームの「ロングヒット作品」と同じ取り方
-    /// （120〜300日前に出て、直近3か月の閲覧数が多い作品。241 は本番環境の「イラスト」）
-    func longHitChapters() async throws -> [KFContent] {
-        try await homeShelfContents(kind: .longHits, attributeID: 0, page: 0).results ?? []
     }
 
     /// ホームの棚と「もっと見る」で、条件・取得数・順序を共用する。
@@ -561,20 +521,6 @@ final class KomifloAPI: NSObject, ObservableObject {
 }
 
 // MARK: - Response models（api.komiflo.com のJSON）
-
-/// 作品の各ページの画像のファイル名（content/id の imgs。キーはページの順番の数字）
-struct KFPageImagesResponse: Decodable {
-    let content: Content?
-
-    struct Content: Decodable {
-        let cdnPublic: String?
-        let imgs: [String: Img]?
-    }
-
-    struct Img: Decodable {
-        let filename: String?
-    }
-}
 
 struct KFReadingListResponse: Decodable {
     let results: Results?

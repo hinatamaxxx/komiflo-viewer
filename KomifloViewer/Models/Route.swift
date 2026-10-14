@@ -176,10 +176,6 @@ private struct LogoutKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
-private struct OpenMenuKey: EnvironmentKey {
-    static let defaultValue: () -> Void = {}
-}
-
 extension EnvironmentValues {
     /// 今いるタブの画面に遷移する
     var openRoute: (Route) -> Void {
@@ -203,11 +199,5 @@ extension EnvironmentValues {
     var logout: () -> Void {
         get { self[LogoutKey.self] }
         set { self[LogoutKey.self] = newValue }
-    }
-
-    /// 公式メニューを開く（アプリ全体で1つだけ。どのタブから開いても同じメニュー）
-    var openMenu: () -> Void {
-        get { self[OpenMenuKey.self] }
-        set { self[OpenMenuKey.self] = newValue }
     }
 }

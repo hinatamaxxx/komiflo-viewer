@@ -101,19 +101,6 @@ struct InlineSearchField: UIViewRepresentable {
     }
 }
 
-extension View {
-    /// 上に置く設定のときだけ、iOS標準の検索バー（ナビゲーションバーの下）を付ける。
-    /// 下に引っぱるまで隠れる作りだと、位置を切り替えた直後に消えて見えるので、常に表示する
-    @ViewBuilder
-    func searchable(_ enabled: Bool, text: Binding<String>, prompt: String) -> some View {
-        if enabled {
-            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: prompt)
-        } else {
-            self
-        }
-    }
-}
-
 /// 一番上でさらに下に引っぱったときに一度だけ動かす（「さがす」で検索欄にカーソルを入れるのに使う）。
 /// スクロール位置を読めるのはiOS 18以降なので、それより前は何もしない
 struct PullDownAction: ViewModifier {

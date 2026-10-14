@@ -363,23 +363,6 @@ private struct TabBarBackground: ViewModifier {
     }
 }
 
-extension TabBarStyle {
-    /// iOSのタブバー自体の見た目も切り替える（ガラス：iOS標準、ダーク：塗りつぶし）
-    static func applyAppearance(_ style: String) {
-        let appearance = UITabBarAppearance()
-        if style == dark {
-            appearance.configureWithOpaqueBackground()
-            appearance.backgroundColor = UIColor(red: 0.09, green: 0.09, blue: 0.11, alpha: 1)
-            UITabBar.appearance().standardAppearance = appearance
-            UITabBar.appearance().scrollEdgeAppearance = appearance
-        } else {
-            appearance.configureWithDefaultBackground()
-            UITabBar.appearance().standardAppearance = appearance
-            UITabBar.appearance().scrollEdgeAppearance = nil
-        }
-    }
-}
-
 /// タブバーはスクロールしても同じ大きさを保つ。
 private struct GlassTabBar: ViewModifier {
     func body(content: Content) -> some View {

@@ -13,65 +13,6 @@ struct CommentPostButtonSettingsControls: View {
     }
 }
 
-/// 作品詳細に出すコメントの先頭数件と「すべて見る」
-struct CommentsPreview: View {
-    let contentID: Int
-    var title: String = ""
-    @ObservedObject var library: LibraryStore
-
-    @State private var comments: [KFComment] = []
-    @State private var total: Int?
-    @State private var hasLoaded = false
-    @State private var isShowingAll = false
-    @State private var firstPage: KFCommentsResponse?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("コメント")
-                    .font(.headline)
-                if let total, total > 0 {
-                    Text("\(total)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button((total ?? 0) > comments.prefix(3).count ? "すべて見る" : "開く") { isShowingAll = true }
-                    .font(.subheadline)
-            }
-
-            if !hasLoaded {
-                ProgressView().frame(maxWidth: .infinity)
-            } else if comments.isEmpty {
-                Text("まだコメントはありません")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(comments.prefix(3)) { comment in
-                    CommentBubble(comment: comment)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .task {
-            guard !hasLoaded else { return }
-            if let response = try? await library.api.comments(contentID: contentID, page: 0) {
-                firstPage = response
-                comments = response.results ?? []
-                total = response.total
-            }
-            hasLoaded = true
-        }
-        .commentsPanel(isPresented: $isShowingAll) {
-            CommentsSheet(contentID: contentID, library: library, title: title, firstPage: firstPage, onReload: { response in
-                firstPage = response
-                comments = response.results ?? []
-                total = response.total
-            })
-        }
-    }
-}
-
 /// 吹き出しから、作品ページを挟まずコメントを開く。
 struct CommentsButton<Label: View>: View {
     let contentID: Int
