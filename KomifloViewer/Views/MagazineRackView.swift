@@ -207,8 +207,14 @@ struct IssueMonthPage: View {
         let start = month ?? calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? Date()
         let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: start) ?? start
         let loaded = try await library.api.publishedIssues(from: start, to: end)
-        return MagazineLineup.ordered(loaded.filter { $0.type == nil || $0.type == "volume" },
-                                      slug: { $0.magazineSlug })
+        let lineup = MagazineLineup.ordered(loaded.filter { $0.type == nil || $0.type == "volume" },
+                                            slug: { $0.magazineSlug })
+        guard month == nil else { return lineup }
+        // 新作は配信の新しい順（上が新しい号）。同じ日に出た号は雑誌の並び順のまま
+        return lineup.enumerated().sorted { a, b in
+            let left = a.element.published ?? .distantPast, right = b.element.published ?? .distantPast
+            return left != right ? left > right : a.offset < b.offset
+        }.map(\.element)
     }
 }
 
