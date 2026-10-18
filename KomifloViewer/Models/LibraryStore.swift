@@ -3,13 +3,18 @@ import Foundation
 /// Komifloアカウントの閲覧履歴・ブックマーク・いいねを読み込んで保持する
 @MainActor
 final class LibraryStore: ObservableObject {
-    struct Feed {
-        var items: [ComicSummary] = []
-        var isLoading = false
-        var error: String?
-        var hasMore = true
+    /// 番号で切り替える一覧（タグのページと同じく、1ページずつ取得してページごとに保持する）
+    struct PagedFeed {
+        var pages: [Int: [ComicSummary]] = [:]
+        var pageCount: Int?
         var total: Int?
-        var hasLoaded = false
+        /// 最後に見たページ（0始まり。上の切り替えで戻ってきたときにこのページを出す）
+        var page = 0
+        var loading: Set<Int> = []
+        var errors: [Int: String] = [:]
+
+        var current: [ComicSummary]? { pages[page] }
+        var error: String? { errors[page] }
     }
 
     enum Kind {
@@ -39,38 +44,26 @@ final class LibraryStore: ObservableObject {
         var apiValue: String? { self == .all ? nil : rawValue }
     }
 
-    enum HistoryOrder: String, CaseIterable, Identifiable {
+    /// 新しい順・古い順（閲覧履歴・ブックマーク・いいねで共通）
+    enum ListOrder: String, CaseIterable, Identifiable {
         case newest, oldest
         var id: String { rawValue }
         var label: String { self == .newest ? "新しい順" : "古い順" }
-
-        func sourcePage(_ page: Int, totalPages: Int) -> Int {
-            self == .newest ? page : max(0, totalPages - 1 - page)
-        }
     }
 
-    @Published private(set) var history = Feed()
-    @Published private(set) var bookmarks = Feed()
-    @Published private(set) var likes = Feed()
+    /// 一覧を区別する条件。並び順・絞り込み・月ごとに、取得したページを別々に保つ
+    struct ListKey: Hashable {
+        let kind: Kind
+        let order: ListOrder
+        var filter: BookmarkFilter?
+        var month: Date?
+    }
 
+    @Published private(set) var lists: [ListKey: PagedFeed] = [:]
     @Published private(set) var bookmarkFilter: BookmarkFilter =
         BookmarkFilter(rawValue: UserDefaults.standard.string(forKey: "bookmarkFilter") ?? "") ?? .all
-    @Published private(set) var historyOrder: HistoryOrder = .newest
-    private var historyPageCount: Int?
-    /// 同じ月の並び順ごとに、表示済みの一覧と次の取得位置を保持する。
-    private struct HistorySnapshot {
-        var feed: Feed
-        let nextPage: Int
-        let pageCount: Int?
-    }
-    private var historySnapshots: [HistoryOrder: HistorySnapshot] = [:]
-    /// スワイプで離れた絞り込みも、一覧と続きの取得位置を保持する。
-    private struct BookmarkSnapshot {
-        var feed: Feed
-        let nextPage: Int
-        let preparedAt: Date?
-    }
-    private var bookmarkSnapshots: [BookmarkFilter: BookmarkSnapshot] = [:]
+    /// 各一覧で最後に選んだ並び順（上の切り替えで戻ってきたときに使う）
+    @Published private(set) var orders: [Kind: ListOrder] = [:]
     /// 閲覧履歴の月別の絞り込み（nil なら全て）。月の1日で表す
     @Published private(set) var historyMonth: Date?
     /// 閲覧履歴がある月（新しい順）
@@ -82,80 +75,90 @@ final class LibraryStore: ObservableObject {
     let api: KomifloAPI
 
     private var user: KFUser?
-    private var allLikedIDs: [Int] = []
+    /// いいねした作品のID（公式はIDだけを新しい順に返す）
+    private var allLikedIDs: [Int]?
     private var markRevision = 0
     private var summaryCache: [Int: ComicSummary] = [:]
     private var magazineCacheReads: Set<Int> = []
     private var magazineIdentities: [Int: MagazineIdentity] = [:]
     private var magazineTasks: [Int: Task<ComicSummary?, Never>] = [:]
     private let magazineRequests = MagazineMetadataRequests()
-    private let pageSize = 20
-    /// 次に読むページ番号。Komifloのページは0始まり（page=0 が最新の20件）
-    private var nextPage: [Kind: Int] = [:]
-    private var feedGeneration: [Kind: UUID] = [:]
+    /// 公式の1ページの件数
+    static let pageSize = 20
+    private var pageSize: Int { Self.pageSize }
+    private var listGeneration: [ListKey: UUID] = [:]
+    private var lastPrepared: [ListKey: Date] = [:]
+    private var preparing: [PreparingPage: Task<Void, Never>] = [:]
 
     init(api: KomifloAPI) {
         self.api = api
     }
 
-    func feed(_ kind: Kind) -> Feed {
+    // MARK: - 一覧（ページ切り替え）
+
+    /// 今の絞り込み・月で、その並び順の一覧を指す
+    func key(_ kind: Kind, order: ListOrder? = nil) -> ListKey {
+        let order = order ?? self.order(kind)
         switch kind {
-        case .history: return history
-        case .bookmarks: return bookmarks
-        case .likes: return likes
+        case .history: return ListKey(kind: kind, order: order, month: historyMonth)
+        case .bookmarks: return ListKey(kind: kind, order: order, filter: bookmarkFilter)
+        case .likes: return ListKey(kind: kind, order: order)
         }
     }
 
-    /// 横スワイプの隣のページにも取得済みの一覧を渡す。表示だけでは通信しない。
-    func historyFeed(for order: HistoryOrder) -> Feed {
-        if order == historyOrder { return history }
-        if history.hasLoaded, !history.hasMore, history.error == nil {
-            var reversed = history
-            reversed.items.reverse()
-            reversed.isLoading = false
-            return reversed
+    func list(_ key: ListKey) -> PagedFeed { lists[key] ?? PagedFeed() }
+
+    /// そのページの最後の作品が、一覧の何作品目か（ページの下の「20/100作品」に使う）
+    func shownCount(_ key: ListKey, page: Int) -> Int? {
+        let feed = list(key)
+        guard let total = feed.total, let items = feed.pages[page] else { return nil }
+        // 閲覧履歴・ブックマークの古い順は公式の最後のページ（件数が少ない）から始まるので、後ろから数える
+        if key.order == .oldest, key.kind != .likes, let count = feed.pageCount {
+            return max(0, min(total, total - (count - 1 - page) * pageSize))
         }
-        return historySnapshots[order]?.feed ?? Feed()
+        return min(total, page * pageSize + items.count)
     }
 
-    func bookmarkFeed(for filter: BookmarkFilter) -> Feed {
-        if filter == bookmarkFilter { return bookmarks }
-        return bookmarkSnapshots[filter]?.feed ?? Feed()
+    func order(_ kind: Kind) -> ListOrder { orders[kind] ?? .newest }
+
+    func setOrder(_ order: ListOrder, for kind: Kind) {
+        if orders[kind] != order { orders[kind] = order }
     }
 
-    private func update(_ kind: Kind, _ change: (inout Feed) -> Void) {
-        switch kind {
-        case .history: change(&history)
-        case .bookmarks: change(&bookmarks)
-        case .likes: change(&likes)
-        }
+    private func update(_ key: ListKey, _ change: (inout PagedFeed) -> Void) {
+        var feed = lists[key] ?? PagedFeed()
+        change(&feed)
+        lists[key] = feed
     }
 
-    private var preparingFeeds: [Kind: Task<Void, Never>] = [:]
-    private var lastPrepared: [Kind: Date] = [:]
-    private var preparingFollows: Task<Void, Never>?
+    private struct PreparingPage: Hashable {
+        let key: ListKey
+        let page: Int
+    }
 
-    /// 先読みと表示時の更新は同じ処理を待つ。タブ移動によるキャンセルでも先読みを中断しない。
-    func prepareFeed(_ kind: Kind, refreshLoaded: Bool = true) async {
-        if let running = preparingFeeds[kind] {
+    /// ページを用意する（省略時は最後に見たページ）。まだ無ければ保存分をすぐ出してから公式から取り直す。
+    /// 取得済みなら、refreshLoaded のときだけ取り直す（throttled なら一覧ごとに30秒に1回まで）。
+    /// 先読みと表示時の更新は同じ処理を待ち、タブ移動によるキャンセルでも中断しない
+    func prepare(_ key: ListKey, page: Int? = nil, refreshLoaded: Bool = true, throttled: Bool = true) async {
+        let page = page ?? list(key).page
+        let preparingPage = PreparingPage(key: key, page: page)
+        if let running = preparing[preparingPage] {
             await running.value
             return
         }
-        guard refreshLoaded || !feed(kind).hasLoaded else { return }
-        guard !feed(kind).isLoading else { return }
-        if feed(kind).hasLoaded, let last = lastPrepared[kind],
-           Date().timeIntervalSince(last) < 30 { return }
+        let loaded = list(key).pages[page] != nil
+        guard !loaded || refreshLoaded else { return }
+        if loaded, throttled, let last = lastPrepared[key], Date().timeIntervalSince(last) < 30 { return }
         let task = Task {
-            defer { preparingFeeds[kind] = nil }
-            if !feed(kind).hasLoaded { await restoreFromCache(kind) }
-            await refreshTop(kind)
-            if feed(kind).hasLoaded, feed(kind).error == nil {
-                lastPrepared[kind] = Date()
-            }
+            defer { preparing[preparingPage] = nil }
+            await loadPage(key, page: page, force: loaded)
+            if list(key).errors[page] == nil { lastPrepared[key] = Date() }
         }
-        preparingFeeds[kind] = task
+        preparing[preparingPage] = task
         await task.value
     }
+
+    private var preparingFollows: Task<Void, Never>?
 
     func prepareFollows() async {
         if let running = preparingFollows {
@@ -172,263 +175,151 @@ final class LibraryStore: ObservableObject {
         await task.value
     }
 
-    // MARK: - 読み込み
+    /// 表示するページを変えたとき（スワイプ・ページ番号）。最後に見たページとして覚え、未取得なら取得する
+    func selectPage(_ page: Int, for key: ListKey) async {
+        guard page >= 0, page != list(key).page else { return }
+        update(key) { $0.page = page }
+        await loadPage(key, page: page, force: false)
+    }
 
-    /// 1ページ分読み込む（一覧の最後までスクロールしたとき）
-    func loadMore(_ kind: Kind, reset: Bool = false) async {
-        if reset {
-            feedGeneration[kind] = UUID()
-            update(kind) { $0 = Feed() }
-            nextPage[kind] = 0
-            if kind == .history {
-                historyPageCount = nil
-                historySnapshots.removeAll()
-            }
-            if kind == .bookmarks { bookmarkSnapshots.removeAll() }
-            if kind == .likes { allLikedIDs = [] }
-        }
-        guard !feed(kind).isLoading, feed(kind).hasMore else { return }
-        let ticket = feedGeneration[kind] ?? UUID()
-        feedGeneration[kind] = ticket
-        update(kind) {
-            $0.isLoading = true
-            $0.error = nil
+    /// 取得済みのページと件数を捨てて、表示中のページから取り直す（読み込めなかったときの再読み込み）
+    func reload(_ key: ListKey) async {
+        listGeneration[key] = UUID()
+        let page = list(key).page
+        lists[key] = PagedFeed(page: page)
+        await loadPage(key, page: page, force: true)
+    }
+
+    private struct PageResult {
+        let items: [ComicSummary]
+        let pageCount: Int
+        let total: Int?
+    }
+
+    private func loadPage(_ key: ListKey, page: Int, force: Bool) async {
+        let known = list(key)
+        guard !known.loading.contains(page), force || known.pages[page] == nil else { return }
+        let ticket = listGeneration[key] ?? UUID()
+        listGeneration[key] = ticket
+        let revision = markRevision
+        update(key) {
+            $0.loading.insert(page)
+            $0.errors[page] = nil
         }
         defer {
-            if feedGeneration[kind] == ticket {
-                update(kind) { $0.isLoading = false }
-            }
+            if listGeneration[key] == ticket { update(key) { $0.loading.remove(page) } }
         }
-
+        // 保存してある前回の応答で先に出す（いいねは作品ごとの取得になるので対象外）
+        if known.pages[page] == nil, key.kind != .likes,
+           let cached = try? await APICache.fromCache({
+               try await fetchPage(key, page: page, pageCount: known.pageCount)
+           }) {
+            guard listGeneration[key] == ticket else { return }
+            apply(cached, to: key, page: page, revision: revision)
+        }
         do {
-            if kind == .likes {
-                try await loadNextLikes(reset: reset, ticket: ticket)
-            } else {
-                try await loadNextReadingListPage(kind, reset: reset, ticket: ticket)
-            }
+            // 取り直すときは件数も数え直す（古い順のページの位置が変わるため）
+            let fresh = try await fetchPage(key, page: page, pageCount: force ? nil : list(key).pageCount)
+            guard listGeneration[key] == ticket else { return }
+            apply(fresh, to: key, page: page, revision: revision)
         } catch {
-            guard feedGeneration[kind] == ticket, !Task.isCancelled,
+            guard listGeneration[key] == ticket, !Task.isCancelled,
                   !(error is CancellationError), (error as? URLError)?.code != .cancelled else { return }
-            update(kind) {
-                $0.error = error.localizedDescription
-                $0.hasLoaded = true
+            // 前回の内容が出ていれば、取り直しに失敗してもそのまま
+            update(key) { if $0.pages[page] == nil { $0.errors[page] = error.localizedDescription } }
+        }
+    }
+
+    private func apply(_ result: PageResult, to key: ListKey, page: Int, revision: Int) {
+        result.items.forEach { summaryCache[$0.id] = $0 }
+        if key.kind == .bookmarks, revision == markRevision {
+            bookmarkedIDs.formUnion(result.items.map(\.id))
+        }
+        update(key) { feed in
+            if feed.pageCount != result.pageCount {
+                // ページ数が変わったら、ほかのページの取得済みの内容は位置がずれるので捨てる
+                feed.pages = feed.pages.filter { $0.key == page }
             }
+            feed.pages[page] = result.items
+            feed.pageCount = result.pageCount
+            feed.total = result.total ?? feed.total
+            feed.errors[page] = nil
+            if feed.page >= result.pageCount { feed.page = max(0, result.pageCount - 1) }
         }
     }
 
-    /// 表示中の一覧は消さずに、最新の1ページ目だけ取り直して先頭に反映する
-    /// （最近読んだ作品が上に来る。読み込み中も今の一覧を出したままにできる）
-    func refreshTop(_ kind: Kind) async {
-        if kind == .bookmarks {
-            guard !bookmarks.isLoading else { return }
-            bookmarkSnapshots.removeAll()
-        }
-        // 閲覧や手動更新で順番が変わり得るため、別の並び順も次回取り直す。
-        if kind == .history {
-            guard !history.isLoading else { return }
-            historySnapshots.removeAll()
-        }
-        let ticket = feedGeneration[kind]
-        guard feed(kind).hasLoaded else {
-            await loadMore(kind)
-            return
-        }
-        if kind == .history, historyOrder == .oldest {
-            // 閲覧で既存の履歴も移動するため、逆順は境界を取り直して継ぎ足しの混在を防ぐ。
-            await loadMore(.history, reset: true)
-            return
-        }
-        if kind == .likes {
-            await refreshLikesTop()
-            return
-        }
-        guard !feed(kind).isLoading else { return }
-        do {
-            let user = try await currentUser(forceReload: false)
-            guard let listID = user.readingLists?.first(where: { $0.listType == kind.listType })?.id else { return }
-            let response = try await readingListPage(kind, listID: listID, page: 0)
-            guard feedGeneration[kind] == ticket else { return }
-            let fresh = (response.results?.contents ?? []).map(\.summary)
-            fresh.forEach { summaryCache[$0.id] = $0 }
-            let freshIDs = Set(fresh.map(\.id))
-            update(kind) { feed in
-                feed.items = fresh + feed.items.filter { !freshIDs.contains($0.id) }
-                feed.total = response.total ?? feed.total
-                feed.error = nil
-            }
-        } catch {
-            // 取り直しに失敗しても、今の一覧はそのまま出しておく
-        }
-    }
-
-    /// 保存してある前回の一覧をすぐ出す（通信しない）。まだ読み込んでいないときだけ。
-    /// 保存が無かったときは何もしない（そのあとの通常の読み込みに任せる）
-    func restoreFromCache(_ kind: Kind) async {
-        guard !feed(kind).hasLoaded, !feed(kind).isLoading else { return }
-        await APICache.fromCache { await loadMore(kind) }
-        if feed(kind).error != nil || feed(kind).items.isEmpty {
-            update(kind) { $0 = Feed() }
-            nextPage[kind] = 0
-            if kind == .history { historyPageCount = nil }
-            if kind == .likes { allLikedIDs = [] }
-        }
-    }
-
-    /// いいねの一覧を、今の表示のまま取り直す（いいねが変わっていなければ何もしない）
-    private func refreshLikesTop() async {
-        let revision = markRevision
-        let ticket = feedGeneration[.likes]
-        guard let user = try? await currentUser(forceReload: false),
-              let ids = try? await api.likedIDs(userID: user.id), markRevision == revision,
-              feedGeneration[.likes] == ticket else { return }
-        likedIDs = Set(ids)
-        guard ids != allLikedIDs else { return }
-        allLikedIDs = ids
-        let count = max(likes.items.count, pageSize)
-        let fresh = await summaries(ids: Array(ids.prefix(count)))
-        guard markRevision == revision, feedGeneration[.likes] == ticket else { return }
-        likes.items = fresh
-        likes.total = ids.count
-        likes.hasMore = fresh.count < ids.count
-    }
-
-    private func loadNextReadingListPage(_ kind: Kind, reset: Bool, ticket: UUID) async throws {
-        let revision = markRevision
-        let user = try await currentUser(forceReload: reset)
-        guard feedGeneration[kind] == ticket else { return }
-        guard let listID = user.readingLists?.first(where: { $0.listType == kind.listType })?.id else {
-            update(kind) {
-                $0.hasMore = false
-                $0.hasLoaded = true
-            }
-            return
-        }
-        let page = nextPage[kind] ?? 0
-        let response = try await readingListPage(kind, listID: listID, page: page)
-        guard feedGeneration[kind] == ticket else { return }
-        let newItems = (response.results?.contents ?? []).map(\.summary)
-        newItems.forEach { summaryCache[$0.id] = $0 }
-        if kind == .bookmarks, revision == markRevision {
-            bookmarkedIDs.formUnion(newItems.map(\.id))
-        }
-        update(kind) { feed in
-            let known = Set(feed.items.map(\.id))
-            feed.items += newItems.filter { !known.contains($0.id) }
-            feed.total = response.total
-            feed.hasMore = page + 1 < (response.totalPages ?? 0) && !newItems.isEmpty
-            feed.hasLoaded = true
-        }
-        nextPage[kind] = page + 1
-    }
-
-    /// 公式サイトと同じ条件で1ページ読む
-    private func readingListPage(_ kind: Kind, listID: Int, page: Int) async throws -> KFReadingListResponse {
-        switch kind {
-        case .bookmarks:
-            return try await api.readingList(
-                id: listID,
-                page: page,
-                filter: bookmarkFilter.apiValue
-            )
-        case .history:
-            return try await historyPage(listID: listID, page: page)
-        case .likes:
-            throw KomifloAPIError.invalidResponse
-        }
-    }
-
-    private func historyPage(listID: Int, page: Int) async throws -> KFReadingListResponse {
-        let order = historyOrder
-        let month = historyMonth
-        let ticket = feedGeneration[.history]
-        let end = month.map {
-            Calendar(identifier: .gregorian).date(byAdding: DateComponents(month: 1, day: -1), to: $0) ?? $0
+    /// 公式サイトと同じ条件で1ページ読む。古い順は、先頭ページの件数情報から最後のページを求めて逆向きに読む（全件は取らない）
+    private func fetchPage(_ key: ListKey, page: Int, pageCount: Int?) async throws -> PageResult {
+        if key.kind == .likes { return try await likesPage(key, page: page, refreshIDs: pageCount == nil) }
+        let user = try await currentUser(forceReload: false)
+        guard let listID = user.readingLists?.first(where: { $0.listType == key.kind.listType })?.id else {
+            return PageResult(items: [], pageCount: 1, total: 0)
         }
         func fetch(_ index: Int) async throws -> KFReadingListResponse {
-            try await api.readingList(id: listID, page: index, startDate: month, endDate: end)
+            if key.kind == .bookmarks {
+                return try await api.readingList(id: listID, page: index, filter: key.filter?.apiValue)
+            }
+            let end = key.month.map {
+                Calendar(identifier: .gregorian).date(byAdding: DateComponents(month: 1, day: -1), to: $0) ?? $0
+            }
+            return try await api.readingList(id: listID, page: index, startDate: key.month, endDate: end)
         }
-        guard order == .oldest else { return try await fetch(page) }
-
-        // 全件を取得せず、先頭の件数情報から最後のページを求める。
+        func items(_ response: KFReadingListResponse) -> [ComicSummary] {
+            (response.results?.contents ?? []).map(\.summary)
+        }
+        guard key.order == .oldest else {
+            let response = try await fetch(page)
+            return PageResult(items: items(response), pageCount: max(1, response.totalPages ?? 1), total: response.total)
+        }
         var first: KFReadingListResponse?
-        if page == 0 || historyPageCount == nil {
+        var count = pageCount
+        if count == nil {
             first = try await fetch(0)
-            guard feedGeneration[.history] == ticket else { throw CancellationError() }
-            historyPageCount = max(1, first?.totalPages ?? 1)
+            count = max(1, first?.totalPages ?? 1)
         }
-        let count = historyPageCount ?? 1
-        guard page < count else {
-            return KFReadingListResponse(results: .init(contents: [], name: nil), total: history.total, totalPages: count)
-        }
-        let index = order.sourcePage(page, totalPages: count)
+        let total = count ?? 1
+        guard page < total else { return PageResult(items: [], pageCount: total, total: first?.total) }
+        let index = total - 1 - page
         let response: KFReadingListResponse
         if index == 0, let first { response = first } else { response = try await fetch(index) }
-        guard feedGeneration[.history] == ticket else { throw CancellationError() }
-        return KFReadingListResponse(
-            results: .init(contents: Array((response.results?.contents ?? []).reversed()), name: response.results?.name),
-            total: response.total, totalPages: count)
+        return PageResult(items: items(response).reversed(), pageCount: total, total: response.total ?? first?.total)
     }
 
-    // MARK: - 絞り込み・並び順
-
-    func setBookmarkFilter(_ filter: BookmarkFilter) async {
-        guard filter != bookmarkFilter else { return }
-        if bookmarks.hasLoaded, bookmarks.error == nil {
-            var saved = bookmarks
-            saved.isLoading = false
-            bookmarkSnapshots[bookmarkFilter] = BookmarkSnapshot(
-                feed: saved, nextPage: nextPage[.bookmarks] ?? 0, preparedAt: lastPrepared[.bookmarks])
+    /// いいねはIDしか返らないので、ページの分だけ作品情報を取りに行く
+    private func likesPage(_ key: ListKey, page: Int, refreshIDs: Bool) async throws -> PageResult {
+        let ids: [Int]
+        if !refreshIDs, page != 0, let known = allLikedIDs {
+            ids = known
+        } else {
+            let revision = markRevision
+            let user = try await currentUser(forceReload: false)
+            ids = try await api.likedIDs(userID: user.id)
+            allLikedIDs = ids
+            if revision == markRevision { likedIDs = Set(ids) }
         }
-        feedGeneration[.bookmarks] = UUID()
+        let ordered = key.order == .newest ? ids : Array(ids.reversed())
+        let pageCount = max(1, (ordered.count + pageSize - 1) / pageSize)
+        let pageIDs = Array(ordered.dropFirst(page * pageSize).prefix(pageSize))
+        return PageResult(items: await summaries(ids: pageIDs), pageCount: pageCount, total: ids.count)
+    }
+
+    /// ★・♥を変えたとき。表示中の一覧はそのまま（外した作品もすぐ戻せる）にして、次に表示したときに取り直す
+    private func listsChanged(_ kind: Kind) {
+        for key in lists.keys where key.kind == kind { lastPrepared[key] = nil }
+        if kind == .likes { allLikedIDs = nil }
+    }
+
+    // MARK: - 絞り込み・月
+
+    func setBookmarkFilter(_ filter: BookmarkFilter) {
+        guard filter != bookmarkFilter else { return }
         bookmarkFilter = filter
         UserDefaults.standard.set(filter.rawValue, forKey: "bookmarkFilter")
-        if let saved = bookmarkSnapshots[filter] {
-            bookmarks = saved.feed
-            nextPage[.bookmarks] = saved.nextPage
-            lastPrepared[.bookmarks] = saved.preparedAt
-        } else {
-            bookmarks = Feed()
-            nextPage[.bookmarks] = 0
-            lastPrepared[.bookmarks] = nil
-            await loadMore(.bookmarks)
-            if bookmarkFilter == filter, bookmarks.hasLoaded, bookmarks.error == nil {
-                lastPrepared[.bookmarks] = Date()
-            }
-        }
     }
 
-    func setHistoryOrder(_ order: HistoryOrder) async {
-        guard order != historyOrder else { return }
-        if history.hasLoaded, history.error == nil {
-            var saved = history
-            saved.isLoading = false
-            historySnapshots[historyOrder] = HistorySnapshot(
-                feed: saved, nextPage: nextPage[.history] ?? 0, pageCount: historyPageCount)
-            // 全件が揃っていれば、逆順の先頭を取得する通信も不要。
-            if !saved.hasMore {
-                saved.items.reverse()
-                historySnapshots[order] = HistorySnapshot(
-                    feed: saved, nextPage: nextPage[.history] ?? 0, pageCount: historyPageCount)
-            }
-        }
-        feedGeneration[.history] = UUID()
-        historyOrder = order
-        if let saved = historySnapshots[order] {
-            history = saved.feed
-            nextPage[.history] = saved.nextPage
-            historyPageCount = saved.pageCount
-        } else {
-            history = Feed()
-            nextPage[.history] = 0
-            historyPageCount = nil
-            await loadMore(.history)
-        }
-    }
-
-    func setHistoryMonth(_ month: Date?) async {
+    func setHistoryMonth(_ month: Date?) {
         guard month != historyMonth else { return }
         historyMonth = month
-        await loadMore(.history, reset: true)
     }
 
     /// 閲覧履歴がある月の一覧（公式と同じく、最新の月から最古の月まで1か月ずつ）
@@ -448,27 +339,6 @@ final class LibraryStore: ObservableObject {
             month = previous
         }
         historyMonths = months
-    }
-
-    private func loadNextLikes(reset: Bool, ticket: UUID) async throws {
-        let revision = markRevision
-        if !likes.hasLoaded || reset {
-            let user = try await currentUser(forceReload: reset)
-            guard feedGeneration[.likes] == ticket else { return }
-            let ids = try await api.likedIDs(userID: user.id)
-            guard feedGeneration[.likes] == ticket else { return }
-            allLikedIDs = ids
-            if revision == markRevision { likedIDs = Set(ids) }
-            likes.total = allLikedIDs.count
-        }
-        // いいねはIDしか返らないので、20件ずつ作品情報を取りに行く
-        let start = likes.items.count
-        let pageIDs = Array(allLikedIDs.dropFirst(start).prefix(pageSize))
-        let summaries = await summaries(ids: pageIDs)
-        guard feedGeneration[.likes] == ticket else { return }
-        likes.items += summaries
-        likes.hasMore = start + pageIDs.count < allLikedIDs.count
-        likes.hasLoaded = true
     }
 
     /// ★・♥の表示用に、いいね済みIDとブックマーク全件を読み込む
@@ -531,9 +401,7 @@ final class LibraryStore: ObservableObject {
                 throw KomifloAPIError.invalidResponse
             }
             try await api.setBookmarked(newValue, contentID: comicID, readingListID: listID)
-            bookmarkSnapshots.removeAll()
-            if newValue { await prepend(comicID, to: .bookmarks) }
-            bookmarks.total = bookmarks.total.map { $0 + (newValue ? 1 : -1) }
+            listsChanged(.bookmarks)
         } catch {
             setMark(&bookmarkedIDs, comicID, !newValue)
             actionError = "ブックマークを変更できませんでした。\n\(error.localizedDescription)"
@@ -546,15 +414,16 @@ final class LibraryStore: ObservableObject {
         guard likedIDs.contains(comicID) != liked else { return }
         markRevision += 1
         if liked { likedIDs.insert(comicID) } else { likedIDs.remove(comicID) }
+        listsChanged(.likes)
     }
 
     /// 公式のビューアでリーディングリストの状態が変わったときに、アプリが覚えている「ブックマーク済み」を合わせる（通信はしない）
     func noteBookmarked(_ comicID: Int, _ bookmarked: Bool) {
         guard !pendingIDs.contains(comicID) else { return }
         guard bookmarkedIDs.contains(comicID) != bookmarked else { return }
-        bookmarkSnapshots.removeAll()
         markRevision += 1
         if bookmarked { bookmarkedIDs.insert(comicID) } else { bookmarkedIDs.remove(comicID) }
+        listsChanged(.bookmarks)
     }
 
     func toggleLike(_ comicID: Int) async {
@@ -567,12 +436,7 @@ final class LibraryStore: ObservableObject {
         do {
             let user = try await currentUser(forceReload: false)
             try await api.setLiked(newValue, contentID: comicID, userID: user.id)
-            if newValue {
-                allLikedIDs.removeAll { $0 == comicID }
-                allLikedIDs.insert(comicID, at: 0)
-                await prepend(comicID, to: .likes)
-            }
-            likes.total = likes.total.map { $0 + (newValue ? 1 : -1) }
+            listsChanged(.likes)
         } catch {
             setMark(&likedIDs, comicID, !newValue)
             actionError = "いいねを変更できませんでした。\n\(error.localizedDescription)"
@@ -581,16 +445,6 @@ final class LibraryStore: ObservableObject {
 
     private func setMark(_ set: inout Set<Int>, _ id: Int, _ on: Bool) {
         if on { set.insert(id) } else { set.remove(id) }
-    }
-
-    /// 追加した作品を一覧の先頭に出す（外した作品は★♥の表示だけ変えて一覧に残し、すぐ戻せるようにする）
-    private func prepend(_ comicID: Int, to kind: Kind) async {
-        guard feed(kind).hasLoaded,
-              !feed(kind).items.contains(where: { $0.id == comicID }),
-              let summary = await comic(id: comicID) else {
-            return
-        }
-        update(kind) { $0.items.insert(summary, at: 0) }
     }
 
     // MARK: - フォロー（作家・タグ）

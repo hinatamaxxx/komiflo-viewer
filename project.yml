@@ -18,8 +18,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.komifloviewer.app
         PRODUCT_NAME: KomifloViewer
-        MARKETING_VERSION: "3.32.293"
-        CURRENT_PROJECT_VERSION: "400"
+        MARKETING_VERSION: "3.32.300"
+        CURRENT_PROJECT_VERSION: "407"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES

@@ -254,12 +254,6 @@ final class KomifloAPI: NSObject, ObservableObject {
         return attribute
     }
 
-    /// 最近出た号（中身の作品つき）。ホームで使う
-    func latestIssues(since: Date) async throws -> [KFContent] {
-        try await get("/content/latest?from=\(Self.dayFormat.string(from: since))", as: KFContentListResponse.self)
-            .results ?? []
-    }
-
     /// 作品のコメント（20件ずつ、page は0始まり）
     func comments(contentID: Int, page: Int) async throws -> KFCommentsResponse {
         try await get("/content/id/\(contentID)/comments?page=\(page)", as: KFCommentsResponse.self)

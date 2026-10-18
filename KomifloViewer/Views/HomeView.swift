@@ -280,14 +280,9 @@ struct HomeView: View {
     private func load(force: Bool = false) async {
         // 最近読んだ作品・★♥は裏で更新する
         Task {
-            if force {
-                await library.loadMore(.history, reset: true)
-            } else if !library.history.hasLoaded {
-                await library.restoreFromCache(.history)
-                await library.refreshTop(.history)
-            } else {
-                await library.refreshTop(.history)
-            }
+            // 読み終えて戻ってきたときにも、閲覧履歴の新しい順の表示中のページを取り直す
+            let key = library.key(.history, order: .newest)
+            if force { await library.reload(key) } else { await library.prepare(key, throttled: false) }
         }
         Task { await library.refreshMarks() }
 

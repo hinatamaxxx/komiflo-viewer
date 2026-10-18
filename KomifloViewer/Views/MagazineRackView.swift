@@ -131,7 +131,7 @@ final class IssueListCache {
 
 /// マガジンラックの1ページ（公式の /magazines と同じ作り）：号ごとに見出しと、その号の作品の表紙を横スクロールで
 struct IssueMonthPage: View {
-    /// nil は「新作」（公式と同じく直近3か月の号）
+    /// nil は「新作」（今月の号。前の月のページと重ならないよう、配信カレンダーと同じく月の区切りで分ける）
     let month: Date?
     let library: LibraryStore
     var cache = IssueListCache()
@@ -151,11 +151,17 @@ struct IssueMonthPage: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
+                if month == nil {
+                    UpcomingDeliveries(library: library)
+                }
                 if issues.isEmpty, let error {
                     EmptyState(title: "読み込めませんでした", systemImage: "exclamationmark.triangle", message: error)
                         .frame(height: 240)
                 } else if issues.isEmpty, isLoading {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 240)
+                } else if issues.isEmpty, month == nil {
+                    EmptyState(title: "今月の号はまだありません", systemImage: "books.vertical", message: "左右にスワイプすると、前の月の号を見られます。")
+                        .frame(height: 240)
                 } else if issues.isEmpty {
                     EmptyState(title: "この月の号はありません", systemImage: "books.vertical", message: "左右にスワイプして別の月を選んでください。")
                         .frame(height: 240)
@@ -197,19 +203,116 @@ struct IssueMonthPage: View {
 
     private func fetchIssues() async throws -> [KFContent] {
         let calendar = Calendar(identifier: .gregorian)
-        let loaded: [KFContent]
-        if let month {
-            let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: month) ?? month
-            loaded = try await library.api.publishedIssues(from: month, to: end)
-        } else {
-            // 公式の「新作」と同じく、3か月前の月初めから
-            let now = calendar.dateComponents([.year, .month], from: Date())
-            let thisMonth = calendar.date(from: now) ?? Date()
-            let since = calendar.date(byAdding: .month, value: -3, to: thisMonth) ?? thisMonth
-            loaded = try await library.api.latestIssues(since: since)
-        }
+        // 新作は今月の1日から。月のページと同じ取り方で、前の月の号を含めない
+        let start = month ?? calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? Date()
+        let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: start) ?? start
+        let loaded = try await library.api.publishedIssues(from: start, to: end)
         return MagazineLineup.ordered(loaded.filter { $0.type == nil || $0.type == "volume" },
                                       slug: { $0.magazineSlug })
+    }
+}
+
+/// 新作のページの先頭に出す、配信カレンダーの今月これからの配信（今日を含む）。押すと雑誌のページへ
+private struct UpcomingDeliveries: View {
+    let library: LibraryStore
+    @Environment(\.openRoute) private var openRoute
+    @State private var schedule: DeliverySchedule?
+
+    private struct Day: Identifiable {
+        let day: Int
+        let label: String
+        let entries: [DeliverySchedule.Entry]
+        var id: Int { day }
+    }
+
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo") ?? .current
+        return calendar
+    }()
+
+    /// 日本時間の今日から月末までで、配信がある日
+    private var days: [Day] {
+        guard let schedule else { return [] }
+        let today = Self.calendar.component(.day, from: Date())
+        let weekdays = ["日", "月", "火", "水", "木", "金", "土"]
+        return (today...31).compactMap { day in
+            guard let date = Self.calendar.date(from: DateComponents(year: schedule.year, month: schedule.month, day: day)),
+                  Self.calendar.component(.month, from: date) == schedule.month else { return nil }
+            let weekday = Self.calendar.component(.weekday, from: date)
+            let entries = schedule.entries(day: day, weekday: weekday)
+            guard !entries.isEmpty else { return nil }
+            let label = day == today ? "今日" : "\(schedule.month)/\(day)（\(weekdays[weekday - 1])）"
+            return Day(day: day, label: label, entries: entries)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if let schedule, !days.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("今月これからの配信")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.sectionTitle)
+                        Spacer()
+                        Button {
+                            openRoute(.deliveryCalendar(slug: schedule.slug))
+                        } label: {
+                            HStack(spacing: 2) {
+                                Text("配信カレンダー")
+                                Image(systemName: "chevron.right")
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(days) { day in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(day.label)
+                                .font(.footnote.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(day.label == "今日" ? Theme.accent : .secondary)
+                                .frame(width: 72, alignment: .leading)
+                            FlowLayout(spacing: 6) {
+                                ForEach(day.entries, id: \.self) { entry in
+                                    Button {
+                                        if let route = Route(sitePath: "/magazines/\(entry.slug)", title: entry.name) {
+                                            openRoute(route)
+                                        }
+                                    } label: {
+                                        Text(entry.name)
+                                            .font(.footnote)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(Theme.bar, in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Theme.bar.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 15)
+            }
+        }
+        // 配信カレンダーと同じ記事を、保存分→公式の最新の順に読む
+        .task {
+            let api = library.api
+            if let saved = try? await APICache.fromCache({ try await api.specialContents() }) { apply(saved) }
+            if let fresh = try? await api.specialContents() { apply(fresh) }
+        }
+    }
+
+    private func apply(_ articles: [KFArticle]) {
+        let now = Self.calendar.dateComponents([.year, .month], from: Date())
+        let current = articles.lazy.compactMap { article -> DeliverySchedule? in
+            guard let slug = article.slug, slug.hasPrefix(DeliverySchedule.slugPrefix), let body = article.body else { return nil }
+            return DeliverySchedule.parse(slug: slug, title: article.data?.title, body: body)
+        }.first { $0.year == now.year && $0.month == now.month }
+        if current != schedule { schedule = current }
     }
 }
 

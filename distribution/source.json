@@ -37,6 +37,15 @@
       ],
       "versions": [
         {
+          "version": "3.32.300",
+          "buildVersion": "407",
+          "date": "2026-10-18",
+          "localizedDescription": "ライブラリの閲覧履歴・ブックマーク・いいねをページ番号で切り替えるようにし、ブックマーク・いいねに新しい順・古い順を追加しました。マガジンの新作は今月の号だけを表示します。ホームのバナーの点がめくっても動かなかったのを直しました。",
+          "downloadURL": "https://github.com/hinatamaxxx/komiflo-viewer/releases/download/v3.32.300/KomifloViewer-3.32.300.ipa",
+          "size": 3574266,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "3.32.293",
           "buildVersion": "400",
           "date": "2026-10-14",
@@ -58,7 +67,7 @@
           "version": "3.32.290",
           "buildVersion": "397",
           "date": "2026-10-14",
-          "localizedDescription": "ホームにピックアップ、配信カレンダー、特集のいいね・共有、雑誌の号数と配信日の表示を追加。アプリの容量を約19MBから約3.5MBに減らしました。",
+          "localizedDescription": "ホームにピックアップ、配信カレンダー、特集のいいね・共有、雑誌の号数と配信日の表示を追加しました。アプリの容量を約19MBから約3.5MBに減らしました。",
           "downloadURL": "https://github.com/hinatamaxxx/komiflo-viewer/releases/download/v3.32.290/KomifloViewer-3.32.290.ipa",
           "size": 3532238,
           "minOSVersion": "17.0"

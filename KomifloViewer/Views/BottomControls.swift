@@ -152,6 +152,12 @@ struct PagedView<Item: Hashable, Page: View>: View {
     @State private var didScrollToInitial = false
     @State private var isScrolling = false
     @State private var contentHeights: [Item: CGFloat] = [:]
+    /// 外から渡されないときの位置（下の点の表示に使う）
+    @State private var ownProgress = PagerProgress()
+    /// 選択の変更で動かしている先のページ
+    @State private var pendingTarget: Item?
+
+    private var currentProgress: PagerProgress { progress ?? ownProgress }
 
     var body: some View {
         GeometryReader { geometry in
@@ -164,7 +170,7 @@ struct PagedView<Item: Hashable, Page: View>: View {
                         .scrollTargetLayout()
                         .onGeometryChange(for: CGFloat.self) { contentGeometry in
                             -contentGeometry.frame(in: .named(scrollSpace)).minX / max(1, geometry.size.width)
-                        } action: { value in progress?.update(value) }
+                        } action: { value in scrolled(to: value) }
                     } else {
                         LazyHStack(alignment: .top, spacing: 0) {
                             pages(size: geometry.size)
@@ -172,7 +178,7 @@ struct PagedView<Item: Hashable, Page: View>: View {
                         .scrollTargetLayout()
                         .onGeometryChange(for: CGFloat.self) { contentGeometry in
                             -contentGeometry.frame(in: .named(scrollSpace)).minX / max(1, geometry.size.width)
-                        } action: { value in progress?.update(value) }
+                        } action: { value in scrolled(to: value) }
                     }
                 }
                 .coordinateSpace(name: scrollSpace)
@@ -194,36 +200,79 @@ struct PagedView<Item: Hashable, Page: View>: View {
                 // 切り替えボタンなどで選択が変わったら、そのページへ動かす
                 .onChange(of: selection) { _, value in
                     guard value != position else { return }
+                    if showsIndicator {
+                        // 指で送って止まったページを選択にしたときは、動かさずに位置だけ合わせる
+                        if visibleItem == value {
+                            position = value
+                            return
+                        }
+                        // 自動送りで最後から先頭へ戻る間は、途中のページを選択にしない
+                        pendingTarget = value
+                    }
                     withAnimation(.easeInOut(duration: 0.3)) {
                         position = value
                     }
+                }
+                // ページが増減・並べ替えられたら（前の一覧のページ数が届いたときなど）、見えていたページに位置を合わせ直す。
+                // 前にページが入ると、スクロールの位置が同じままで別のページが見えてしまう
+                .onChange(of: items) { oldItems, newItems in
+                    // 並べ替えの前に実際に見えていたページを残す。選択は並べ替えと同時に行き先へ変わることがあり、
+                    // それに合わせると、横に動く前に行き先へ一瞬で移ってしまう（ライブラリのページ番号・タブ）
+                    let index = currentProgress.position.map { Int($0.rounded()) }
+                    let visible = index.flatMap { oldItems.indices.contains($0) ? oldItems[$0] : nil }
+                    guard let anchor = [visible, position, selection].compactMap({ $0 }).first(where: newItems.contains)
+                    else { return }
+                    // 位置の記録が同じなら書き換えない（書き換えると、止まったページとして選択に入ってしまう）
+                    if position != anchor { position = anchor }
+                    proxy.scrollTo(anchor, anchor: .leading)
                 }
             }
         }
         .frame(height: sizesToContent ? (contentHeights[selection] ?? 1) : nil)
         .overlay(alignment: .bottom) {
             if showsIndicator, items.count > 1 {
-                HStack(spacing: 6) {
-                    ForEach(items, id: \.self) { item in
-                        Circle()
-                            .fill(item == selection ? Color.white : Color.white.opacity(0.35))
-                            .frame(width: 6, height: 6)
-                    }
-                }
-                .padding(.bottom, 4)
-                .allowsHitTesting(false)
+                PageDots(count: items.count, selectedIndex: items.firstIndex(of: selection) ?? 0,
+                         progress: currentProgress)
+                    .padding(.bottom, 4)
+                    .allowsHitTesting(false)
             }
         }
     }
 
+    private func scrolled(to value: CGFloat) {
+        currentProgress.update(value)
+        // 点を出す横並び（ホームのバナー）は縦の一覧の中にあり、指で送ったときに表示中のページの通知
+        // （scrollPosition）が返らず、選択が前のページのまま残っていた。止まった位置から選択を決める
+        guard showsIndicator else { return }
+        let nearest = value.rounded()
+        guard abs(value - nearest) < 0.01, items.indices.contains(Int(nearest)) else { return }
+        let item = items[Int(nearest)]
+        if let pendingTarget {
+            guard item == pendingTarget else { return }
+            self.pendingTarget = nil
+        }
+        if item != selection { selection = item }
+    }
+
+    private var visibleItem: Item? {
+        guard let position = currentProgress.position else { return nil }
+        let index = Int(position.rounded())
+        return items.indices.contains(index) ? items[index] : nil
+    }
+
     private var observesScrollActivity: Bool {
-        commitsSelectionOnIdle || onScrollActivityChange != nil
+        commitsSelectionOnIdle || onScrollActivityChange != nil || showsIndicator
     }
 
     private func scrollActivityChanged(_ moving: Bool) {
         isScrolling = moving
         if !moving, commitsSelectionOnIdle, let position, position != selection {
             selection = position
+        }
+        // 自動送りの途中で指が触れて止まったときも、止まったページを選択にする（iOS 18以降）
+        if !moving, showsIndicator {
+            pendingTarget = nil
+            if let visibleItem, visibleItem != selection { selection = visibleItem }
         }
         onScrollActivityChange?(moving)
     }
@@ -252,6 +301,28 @@ struct PagedView<Item: Hashable, Page: View>: View {
             page(item)
                 .frame(width: size.width, height: size.height)
                 .clipped()
+        }
+    }
+}
+
+/// ホームのバナーの下の点。表示中の位置だけを購読し、半分を越えたところで次の点へ移る
+private struct PageDots: View {
+    let count: Int
+    let selectedIndex: Int
+    @ObservedObject var progress: PagerProgress
+
+    private var current: Int {
+        let index = progress.position.map { Int($0.rounded()) } ?? selectedIndex
+        return min(count - 1, max(0, index))
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(index == current ? Color.white : Color.white.opacity(0.35))
+                    .frame(width: 6, height: 6)
+            }
         }
     }
 }

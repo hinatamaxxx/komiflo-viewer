@@ -356,6 +356,8 @@ struct FollowAttributeStyle: ViewModifier {
 struct FilterChip: View {
     let title: String
     let isSelected: Bool
+    /// ボタンの左右の余白（ライブラリの1段に5つ並べるときは詰める）
+    var horizontalPadding: CGFloat = 14
     let action: () -> Void
 
     var body: some View {
@@ -363,7 +365,7 @@ struct FilterChip: View {
             Text(title)
                 .font(.footnote.weight(isSelected ? .bold : .regular))
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 7)
                 .background(isSelected ? Theme.accent : Theme.bar, in: Capsule())
         }
