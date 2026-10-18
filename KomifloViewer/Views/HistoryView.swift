@@ -222,19 +222,10 @@ private struct LibraryBars: View {
         return nil
     }
 
-    /// ページ番号の位置。同じタブのページの間ではめくりに合わせて動き、ほかのタブへ移る間は動かさない
+    /// ページ番号の印の位置。めくりには合わせず、選んだページ（押した番号・止まったページ）にその場で移す
     private func pagePosition(of kind: LibraryStore.Kind) -> CGFloat {
-        let value = motion.value
-        func number(_ page: LibraryView.Page?) -> CGFloat? {
-            guard let page, case .list(kind, let index) = page else { return nil }
-            return CGFloat(index)
-        }
-        switch (number(value.from), number(value.to)) {
-        case let (from?, to?): return from + (to - from) * value.fraction
-        case let (from?, nil): return from
-        case let (nil, to?): return to
-        default: return CGFloat(library.list(library.key(kind)).page)
-        }
+        if case .list(kind, let index) = page { return CGFloat(index) }
+        return CGFloat(library.list(library.key(kind)).page)
     }
 
     private func bar(_ kind: LibraryStore.Kind) -> some View {
@@ -391,7 +382,7 @@ struct RemoteComicList: View {
         let key = library.key(kind)
         let count = pageCount
         VStack(spacing: 0) {
-            RemoteComicListControls(kind: kind, library: library, motion: motion, pageCount: count,
+            RemoteComicListControls(kind: kind, library: library, pageCount: count,
                                     page: $page, progress: fixedProgress)
             LibraryPager(page: page,
                          neighbor: { index, forward in
@@ -419,18 +410,17 @@ struct RemoteComicList: View {
     }
 }
 
-/// メニューの一覧の操作。ページ番号の位置はめくりに合わせて動かす
+/// メニューの一覧の操作
 private struct RemoteComicListControls: View {
     let kind: LibraryStore.Kind
     let library: LibraryStore
-    @ObservedObject var motion: LibraryMotion<Int>
     let pageCount: Int
     @Binding var page: Int
     let progress: PagerProgress
 
     var body: some View {
-        let value = motion.value
-        let position = CGFloat(value.from) + CGFloat((value.to ?? value.from) - value.from) * value.fraction
+        // ページ番号の印はめくりに合わせず、選んだページにその場で移す
+        let position = CGFloat(page)
         LibraryListControls(kind: kind, library: library, pageCount: pageCount, selectedPage: $page,
                             progress: progress, positionTransform: { _ in position }, onListChange: {
             let count = max(1, library.list(library.key(kind)).pageCount ?? 1)
@@ -494,7 +484,7 @@ private struct LibraryListControls: View {
             .frame(height: 44)
             PagerTabs(items: Array(0..<pageCount), selection: $selectedPage, progress: progress, scrolls: true,
                       font: .footnote.weight(.semibold), positionTransform: positionTransform,
-                      title: { String($0 + 1) })
+                      scrollsToSelection: false, title: { String($0 + 1) })
                 .frame(height: 32)
                 .padding(.vertical, 6)
         }

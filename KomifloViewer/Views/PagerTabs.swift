@@ -32,6 +32,9 @@ struct PagerTabs<Item: Hashable>: View {
     var font: Font = .system(size: 13, weight: .semibold)
     var selectedFont: Font?
     var positionTransform: (CGFloat) -> CGFloat = { $0 }
+    /// 選択が変わったときに、選択中のボタンが真ん中に来るよう並びを動かす。
+    /// false なら真ん中へは寄せず、選択中のボタンが画面の外にあるときだけ、見える所まで一度にずらす（ページ番号）
+    var scrollsToSelection = true
     let title: (Item) -> String
     @Namespace private var coordinateSpace
 
@@ -54,6 +57,11 @@ struct PagerTabs<Item: Hashable>: View {
                 }
                 .onChange(of: Int(position.rounded())) { _, index in
                     guard items.indices.contains(index) else { return }
+                    guard scrollsToSelection else {
+                        // 見えていれば動かない。外にあれば、端に見える所までなめらかにずらす（真ん中へは寄せない）
+                        withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(scrollTarget(items[index])) }
+                        return
+                    }
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(scrollTarget(items[index]), anchor: .center)
                     }
@@ -108,6 +116,8 @@ struct PagerTabs<Item: Hashable>: View {
                     Capsule().fill(scrolls ? Theme.accent : Color(white: 0.36))
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
+                        // 指に追従しないとき（ページ番号）は、選んだボタンへなめらかに移す
+                        .animation(scrollsToSelection ? nil : .easeInOut(duration: 0.25), value: position)
                 }
             }
             .allowsHitTesting(false)

@@ -121,8 +121,15 @@ final class LibraryStore: ObservableObject {
 
     func order(_ kind: Kind) -> ListOrder { orders[kind] ?? .newest }
 
+    /// 並び順を変えたときは、同じページ番号を見せる（新しい順と古い順は同じ一覧なので、ページ数も引き継ぐ）
     func setOrder(_ order: ListOrder, for kind: Kind) {
-        if orders[kind] != order { orders[kind] = order }
+        guard orders[kind] != order else { return }
+        let previous = list(key(kind))
+        orders[kind] = order
+        update(key(kind)) { feed in
+            if feed.pageCount == nil { feed.pageCount = previous.pageCount }
+            feed.page = min(previous.page, max(0, (feed.pageCount ?? previous.page + 1) - 1))
+        }
     }
 
     private func update(_ key: ListKey, _ change: (inout PagedFeed) -> Void) {
